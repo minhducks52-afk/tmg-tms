@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<title>TMG TMS - Tự kiểm tra</title>
+<style>
+  body { font: 14px/1.5 "Segoe UI", Arial, sans-serif; margin: 24px; color: #1f2430; }
+  h1 { margin: 0 0 4px; } .sub { color: #5b6170; margin-bottom: 16px; }
+  .r { padding: 6px 10px; border-radius: 6px; margin: 4px 0; }
+  .r.ok { background: #e5f6ea; } .r.fail { background: #fdeaea; }
+  .r small { color: #5b6170; display: block; white-space: pre-wrap; }
+  #sum { font-weight: 700; font-size: 16px; margin: 12px 0; }
+  #frames iframe { width: 1100px; height: 700px; border: 1px solid #ccc; margin: 6px 0; display: block; }
+  button { padding: 8px 14px; font: inherit; cursor: pointer; }
+</style>
+<script>window.TMG_DB_NS = 'tstparent';</script>
+<script src="js/store.js"></script>
+<script src="js/schema.js"></script>
+</head>
+<body>
+<h1>Tự kiểm tra hệ thống</h1>
+<div class="sub">Chạy trong vùng dữ liệu thử riêng (<code>?db=tst…</code>) — không đụng tới dữ liệu thật. Dùng sau mỗi lần nâng cấp để kiểm tra ảnh hưởng.</div>
+<button id="run">Chạy lại</button> <label><input type="checkbox" id="keep"> Giữ khung xem sau khi chạy</label>
+<div id="sum"></div><div id="out"></div><div id="frames"></div>
+<script>
+(async function () {
+  const out = document.getElementById('out'), sum = document.getElementById('sum'), framesBox = document.getElementById('frames');
+  const NSS = ['tst1', 'tst2', 'tst3'];
+  let results = [];
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const show = () => {
+    const pass = results.filter(r => r.ok).length;
+    sum.textContent = `${pass}/${results.length} đạt` + (results.length && pass === results.length ? ' ✅' : results.some(r => !r.ok) ? ' ❌' : '');
+    out.innerHTML = results.map(r => `<div class="r ${r.ok ? 'ok' : 'fail'}">${r.ok ? '✔' : '✘'} ${r.name}${r.msg ? `<small>${U.esc(r.msg)}</small>` : ''}</div>`).join('');
+  };
+  async function t(name, fn) { try { await fn(); results.push({ name, ok: true }); } catch (e) { results.push({ name, ok: false, msg: e && (e.stack || e.message || String(e)) }); } show(); }
+  const ok = (c, m) => { if (!c) throw new Error(m || 'Sai'); };
+  const eq = (a, b, m) => { if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error((m || '') + `\n  mong đợi: ${JSON.stringify(b)}\n  thực tế:  ${JSON.stringify(a)}`); };
+
+  async function cleanup() {
+    framesBox.innerHTML = '';
+    const rm = [];
+    for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (/^tmg_(tms_v2|tms_db_v1|tms_session|driver_session)_tst/.test(k)) rm.push(k); }
+    rm.forEach(k => localStorage.removeItem(k));
+    for (const ns of NSS.concat('tstparent')) await new Promise(r => { const q = indexedDB.deleteDatabase('tmg_tms_' + ns); q.onsuccess = q.onerror = q.onblocked = () => r(); });
+  }
+  function frame(src) {
+    return new Promise((res, rej) => {
+      const f = document.createElement('iframe'); f.errors = [];
+      f.src = src;
+      f.onload = async () => {
+        const w = f.contentWindow;
+        w.addEventListener('error', e => f.errors.push(e.message));
+        w.addEventListener('unhandledrejection', e => f.errors.push(String(e.reason && e.reason.message || e.reason)));
+        try { await w.Store.ready(); await sleep(150); res(f); } catch (e) { rej(e); }
+      };
+      framesBox.appendChild(f);
+    });
+  }
+  const tinyImage = () => { const c = document.createElement('canvas'); c.width = c.height = 8; const g = c.getContext('2d'); g.fillStyle = '#e8202e'; g.fillRect(0, 0, 8, 8); return c.toDataURL('image/jpeg', 0.8); };
+  // Tính tổng doanh thu/chi phí độc lập với Store.finance
+  function expectFin(b) {
+    const s = (arr, f, v) => (arr || []).filter(r => !r._deleted && f(r)).reduce((a, r) => a + Number(r[v] || 0), 0);
+    return {
+      rev: s(b.revenue, r => r.status === 'Đã xác nhận', 'amount'),
+      cost: s(b.cost_request, r => ['Đã duyệt', 'Đã chi'].includes(r.status), 'amount') + s(b.op_cost, () => 1, 'amount') + s(b.route_fuel, () => 1, 'total') + s(b.repair_ticket, r => r.approved === 'Có', 'total')
+    };
+  }
+  const counts = b => Object.fromEntries(Object.entries(b).filter(([k, v]) => Array.isArray(v) && !k.startsWith('__')).map(([k, v]) => [k, v.length]));
+
+  async function run() {
+    results = []; show(); await cleanup();
+    const IMG = tinyImage();
+    // Dữ liệu định dạng cũ (v1) có kèm ảnh base64, giống dữ liệu người dùng đang có
+    const v1 = TMG_SEED();
+    v1.cost_request[0].image = IMG; v1.revenue[0].image = IMG; v1.route_fuel[0].image = IMG;
+    const v1Text = JSON.stringify(v1);
+    const expected = expectFin(v1), v1Counts = counts(v1);
+    localStorage.setItem('tmg_tms_db_v1_tst1', v1Text);
+
+    await t('Tiện ích U.num đọc đúng số kiểu Việt Nam', () => {
+      eq([U.num('350.000'), U.num('1.250.000'), U.num('12,5'), U.num(19.5), U.num(''), U.num('-200.000'), U.num(null)], [350000, 1250000, 12.5, 19.5, 0, -200000, 0]);
+    });
+
+    const A = await frame('index.html?db=tst1'); const WA = A.contentWindow, SA = WA.Store;
+    await t('Nâng cấp v1 → v2: không mất bản ghi nào', () => {
+      const now = {}; Object.keys(v1Counts).forEach(c => { now[c] = SA.all(c).length; });
+      eq(now, v1Counts);
+      eq(SA.settings().company, v1.settings.company, 'Thiết lập công ty');
+    });
+    await t('Nâng cấp v1 → v2: số liệu doanh thu/chi phí giữ nguyên', () => {
+      const f = SA.finance({}); eq({ rev: f.revenue, cost: f.cost }, expected);
+    });
+    await t('Nâng cấp v1 → v2: ảnh chuyển sang IndexedDB và đọc lại được', async () => {
+      const r = SA.get('cost_request', v1.cost_request[0].id);
+      ok(SA.Files.isRef(r.image), 'Ảnh chưa được chuyển: ' + String(r.image).slice(0, 30));
+      eq(await SA.Files.get(r.image), IMG, 'Nội dung ảnh');
+      ok(!localStorage.getItem('tmg_tms_db_v1_tst1'), 'Khoá dữ liệu cũ chưa được dọn');
+    });
+    await t('Nâng cấp v1 → v2: đã sao lưu nguyên bản cũ trước khi chuyển', async () => {
+      const b = (await SA.Backups.list()).find(x => x.kind === 'migration');
+      ok(b, 'Không thấy bản sao lưu nâng cấp'); ok(!b.pending, 'Bản sao lưu vẫn ở trạng thái đang chuyển');
+      eq((await SA.Backups.get(b.id)).data, v1Text, 'Nội dung bản sao lưu');
+    });
+    await t('Mã tự động tiếp tục đúng sau nâng cấp (không trùng mã cũ)', () => {
+      const code = SA.nextCode('cost_request', 'DN');
+      ok(!SA.all('cost_request').some(r => r.code === code), 'Trùng mã ' + code);
+    });
+
+    await t('Xoá đưa vào thùng rác, không tính báo cáo; khôi phục được', () => {
+      const r = SA.all('revenue').find(x => x.status === 'Đã xác nhận');
+      const before = SA.finance({}).revenue;
+      SA.remove('revenue', r.id);
+      ok(!SA.all('revenue').some(x => x.id === r.id), 'Vẫn còn trong danh sách');
+      ok(SA.trash().some(x => x.rec.id === r.id), 'Không có trong thùng rác');
+      eq(SA.finance({}).revenue, before - r.amount, 'Doanh thu sau khi xoá');
+      SA.restore('revenue', r.id);
+      eq(SA.finance({}).revenue, before, 'Doanh thu sau khi khôi phục');
+      ok(!SA.trash().some(x => x.rec.id === r.id), 'Vẫn còn trong thùng rác');
+    });
+
+    const B = await frame('index.html?db=tst1'); const SB = B.contentWindow.Store;
+    await t('Hai tab cùng ghi: không tab nào ghi đè dữ liệu của tab kia', () => {
+      SB.all('customer'); // tab B nạp sẵn dữ liệu vào bộ nhớ
+      const x = SA.insert('customer', { name: 'KH tab A' });
+      const y = SB.insert('customer', { name: 'KH tab B' });
+      const stored = JSON.parse(localStorage.getItem('tmg_tms_v2_tst1:c:customer'));
+      ok(stored.some(r => r.id === x.id) && stored.some(r => r.id === y.id), 'Mất bản ghi của một tab');
+    });
+    await t('Hai tab sửa 2 trường khác nhau của cùng bản ghi: giữ cả hai', () => {
+      const v = SA.all('vehicle')[0]; SB.all('vehicle');
+      SA.update('vehicle', v.id, { odometer: 999001 });
+      SB.update('vehicle', v.id, { state: 'Xe hỏng' });
+      const r = JSON.parse(localStorage.getItem('tmg_tms_v2_tst1:c:vehicle')).find(x => x.id === v.id);
+      eq([r.odometer, r.state], [999001, 'Xe hỏng']);
+    });
+    await t('Hai tab tạo mã cùng lúc: không trùng mã', () => {
+      const a = SA.nextCode('order', 'DH'), b = SB.nextCode('order', 'DH'); ok(a !== b, a + ' = ' + b);
+    });
+
+    await t('Giao diện quản trị: mở mọi module/trang/form không lỗi', async () => {
+      const adm = SA.all('admin').find(a => a.username === 'admin');
+      SA.setSession({ id: adm.id, name: adm.name, username: adm.username });
+      WA.location.hash = '#/p/dashboard'; await sleep(200);
+      const fails = [];
+      const routes = Object.keys(WA.TMG_MODULES).map(k => 'm/' + k).concat(['p/dashboard', 'p/board', 'p/rpt_vehicle', 'p/rpt_vehicle/' + SA.all('vehicle')[0].id, 'p/rpt_month', 'p/rpt_cat', 'p/rpt_expiry', 'p/settings', 'p/backup', 'p/trash']);
+      for (const r of routes) {
+        WA.location.hash = '#/' + r; await sleep(r === 'p/backup' ? 250 : 40);
+        if (!WA.document.querySelector('.ph h1')) fails.push('Không hiển thị ' + r);
+        if (r.startsWith('m/')) { const add = WA.document.querySelector('#add'); if (add) { add.click(); if (!WA.document.querySelector('#mf')) fails.push('Không mở form ' + r); const c = WA.document.querySelector('[data-close]'); c && c.click(); } }
+      }
+      ok(!fails.length && !A.errors.length, fails.concat(A.errors).join('\n'));
+    });
+    await t('Quyền duyệt: người dùng không có vai trò không được duyệt chi phí', async () => {
+      const u = SA.insert('admin', { username: 'norole', name: 'Không vai trò', password: 'x', role_id: '', active: 'Có' });
+      SA.setSession({ id: u.id, name: u.name, username: u.username });
+      WA.location.hash = '#/m/cost_request'; await sleep(150);
+      let msg = ''; WA.alert = m => { msg = m; };
+      const btn = [...WA.document.querySelectorAll('[data-a="approveCost"]')][0]; ok(btn, 'Không thấy nút duyệt');
+      const id = btn.closest('tr').dataset.id; const before = SA.get('cost_request', id).status;
+      btn.click(); await sleep(50);
+      ok(/không có quyền/.test(msg), 'Không chặn: ' + msg); eq(SA.get('cost_request', id).status, before);
+      const adm = SA.all('admin').find(a => a.username === 'admin'); SA.setSession({ id: adm.id, name: adm.name, username: adm.username });
+    });
+
+    // App tài xế
+    const drv = SA.all('driver')[0];
+    localStorage.setItem('tmg_driver_session_tst1', JSON.stringify({ driver_id: drv.id, vehicle_id: drv.vehicle_id }));
+    SA.update('vehicle', drv.vehicle_id, { state: 'Xe trống' });
+    const D = await frame('driver.html?db=tst1'); const WD = D.contentWindow, SD = WD.Store, dq = s => WD.document.querySelector(s);
+    await t('App tài xế: bắt đầu → đề nghị chi phí có ảnh → hoàn thành chuyến', async () => {
+      const startBtn = dq('[data-go="start"]'); ok(startBtn, 'Không có chuyến chưa bắt đầu');
+      const rid = startBtn.closest('[data-r]').dataset.r;
+      startBtn.click(); await sleep(30); dq('#sheet-root form').requestSubmit(); await sleep(150);
+      eq(SD.get('route', rid).status, 'Đang chạy', 'Trạng thái chuyến');
+      dq('[data-r="' + rid + '"] [data-go="cost"]').click(); await sleep(30);
+      const f = dq('#sheet-root form'); f.amt.value = '350.000'; f.desc.value = 'Kiểm thử'; dq('#sheet-root [data-photo]').dataset.v = IMG;
+      f.requestSubmit(); await sleep(250);
+      const c = SD.all('cost_request')[0];
+      eq([c.amount, c.status, c.route_id, c.source, c.created_by], [350000, 'Chờ duyệt', rid, 'App', drv.name]);
+      ok(SD.Files.isRef(c.image), 'Ảnh không lưu vào IndexedDB'); eq(await SD.Files.get(c.image), IMG, 'Ảnh đọc lại');
+      const lg = SD.all('activity_log')[0]; eq([lg.user, lg.module], [drv.name, 'cost_request'], 'Nhật ký ghi đúng tài xế');
+      dq('[data-r="' + rid + '"] [data-go="end"]').click(); await sleep(30);
+      const fe = dq('#sheet-root form'); fe.km.value = String((SD.get('route', rid).km_start || 0) + 250); fe.requestSubmit(); await sleep(200);
+      const r = SD.get('route', rid); eq([r.status, r.km_actual], ['Hoàn thành', 250]);
+      eq(SD.get('vehicle', drv.vehicle_id).state, 'Xe trống');
+      ok((r.order_ids || []).every(id => SD.get('order', id).status === 'Hoàn thành'), 'Đơn hàng chưa hoàn thành');
+      ok(!D.errors.length, D.errors.join('\n'));
+    });
+    await t('Văn phòng thấy ngay đề nghị tài xế vừa gửi (đồng bộ giữa các tab)', async () => {
+      await sleep(100);
+      const c = SD.all('cost_request')[0]; ok(SA.get('cost_request', c.id), 'Tab quản trị chưa thấy bản ghi mới');
+    });
+
+    await t('Sao lưu ra file rồi khôi phục sang máy khác: đủ dữ liệu và ảnh', async () => {
+      const txt = await SA.exportJSON(); const blob = JSON.parse(txt);
+      ok(Object.keys(blob.__files).length >= 4, 'File thiếu ảnh');
+      const C = await frame('index.html?db=tst2'); const SC = C.contentWindow.Store;
+      await SC.importJSON(txt);
+      const want = {}, got = {}; SA.cols().forEach(c => { if (c !== 'activity_log') { want[c] = SA.all(c).length; got[c] = SC.all(c).length; } });
+      eq(got, want, 'Số bản ghi');
+      const r = SC.get('cost_request', v1.cost_request[0].id); eq(await SC.Files.get(r.image), IMG, 'Ảnh sau khôi phục');
+      eq(SC.finance({}).revenue, SA.finance({}).revenue, 'Doanh thu');
+      ok((await SC.Backups.list()).some(b => /trước khi khôi phục/.test(b.reason)), 'Không tự sao lưu trước khi khôi phục');
+    });
+    await t('Khôi phục được file sao lưu định dạng cũ (v1)', async () => {
+      const C = framesBox.lastChild; const SC = C.contentWindow.Store;
+      await SC.importJSON(v1Text); eq(SC.finance({}).cost, expected.cost);
+      ok(SC.Files.isRef(SC.get('revenue', v1.revenue[0].id).image), 'Ảnh v1 chưa chuyển');
+    });
+    await t('Nâng cấp bị ngắt giữa chừng: lần mở sau tự hoàn tất từ bản sao lưu', async () => {
+      localStorage.setItem('tmg_tms_db_v1_tst3', v1Text);
+      const E = await frame('index.html?db=tst3'); const SE = E.contentWindow.Store;
+      const b = (await SE.Backups.list()).find(x => x.kind === 'migration'); const full = await SE.Backups.get(b.id); full.pending = true;
+      await SE.Backups.add(full.reason, full.data, { pending: true, kind: 'migration' });
+      // giả lập: đã xoá khoá cũ nhưng chưa ghi xong dữ liệu mới
+      const ks = []; for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith('tmg_tms_v2_tst3:')) ks.push(k); } ks.forEach(k => localStorage.removeItem(k));
+      E.contentWindow.location.reload(); await new Promise(r => { E.onload = async () => { await E.contentWindow.Store.ready(); r(); }; });
+      const S2 = E.contentWindow.Store; const now = {}; Object.keys(v1Counts).forEach(c => { now[c] = S2.all(c).length; });
+      eq(now, v1Counts);
+    });
+
+    if (!document.getElementById('keep').checked) await cleanup();
+  }
+  document.getElementById('run').onclick = run;
+  run();
+})();
+</script>
+</body>
+</html>

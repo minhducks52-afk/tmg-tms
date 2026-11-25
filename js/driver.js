@@ -4,7 +4,7 @@
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
   const esc = U.esc;
-  const SKEY = 'tmg_driver_session';
+  const SKEY = 'tmg_driver_session' + (Store.NS ? '_' + Store.NS : '');
   const P = {
     truck: 'M1 5h14v11H1zM15 9h4l4 4v3h-8zM5.5 19a2 2 0 1 0 0-.1M18.5 19a2 2 0 1 0 0-.1', home: 'M3 11l9-8 9 8v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z',
     route: 'M6 19a2 2 0 1 0 0-.1M18 5a2 2 0 1 0 0-.1M6 17V9a4 4 0 0 1 4-4h6M18 7v8a4 4 0 0 1-4 4H8', plus: 'M12 5v14M5 12h14',
@@ -37,7 +37,7 @@
         <div class="err" id="le"></div><button class="btn">Vào ca làm việc</button>
         <div class="hint">PIN do điều vận cấp trong mục Tài xế (mặc định dữ liệu mẫu: 1234).<br>Dùng trên điện thoại: Chia sẻ → "Thêm vào màn hình chính".</div>
       </form></div>`;
-    $('#lf').onsubmit = e => {
+    $('#lf').onsubmit = async e => {
       e.preventDefault(); const f = new FormData(e.target);
       const phone = String(f.get('p')).replace(/\D/g, '');
       const d = Store.all('driver').find(x => String(x.phone || '').replace(/\D/g, '') === phone && x.active !== 'Không');
@@ -51,7 +51,8 @@
 
   /* ---------- Shell ---------- */
   function render() {
-    if (!S || !me() || !car()) { localStorage.removeItem(SKEY); S = null; return login(); }
+    if (!S || !me() || !car()) { localStorage.removeItem(SKEY); S = null; Store.actor = null; return login(); }
+    Store.actor = me().name; // nhật ký ghi đúng tên tài xế
     const ym = U.today().slice(0, 7); const [y, m] = ym.split('-').map(Number);
     const fin = Store.finance({ from: ym + '-01', to: ym + '-' + new Date(y, m, 0).getDate(), vehicle: S.vehicle_id });
     const trips = Store.all('route').filter(r => r.vehicle_id === S.vehicle_id && U.month(r.pickup_date) === ym && r.status !== 'Hủy').length;
@@ -141,7 +142,7 @@
         <div style="margin:16px 12px"><button class="btn ghost" id="pin">Đổi mã PIN</button></div>`;
       $$('[data-sal]', el).forEach(b => b.onclick = () => { Store.update('salary', b.dataset.sal, { status: 'Đã xác nhận' }, d.name); toast('Đã xác nhận bảng lương'); render(); });
       $('#pin', el).onclick = () => sheet('Đổi mã PIN', `<form id="pf"><div class="f"><label>PIN hiện tại</label><input name="o" type="password" inputmode="numeric" required></div><div class="f"><label>PIN mới (4-8 số)</label><input name="n" type="password" inputmode="numeric" pattern="\\d{4,8}" required></div><button class="btn">Lưu</button></form>`, (root, close) => {
-        $('#pf', root).onsubmit = e => { e.preventDefault(); const f = new FormData(e.target); if (f.get('o') !== String(d.pin)) return toast('PIN hiện tại không đúng'); Store.update('driver', d.id, { pin: f.get('n') }, d.name); close(); toast('Đã đổi PIN'); };
+        $('#pf', root).onsubmit = async e => { e.preventDefault(); const f = new FormData(e.target); if (f.get('o') !== String(d.pin)) return toast('PIN hiện tại không đúng'); Store.update('driver', d.id, { pin: f.get('n') }, d.name); close(); toast('Đã đổi PIN'); };
       });
     }
   };
@@ -156,12 +157,15 @@
     $$('input.money', root).forEach(i => i.addEventListener('input', () => { const n = U.num(i.value); i.value = i.value === '' ? '' : U.money(n); }));
     // photo
     $$('.photo input', root).forEach(i => i.onchange = async () => { const f = i.files[0]; if (!f) return; const url = await U.resizeImage(f); i.closest('.photo').dataset.v = url; i.closest('.photo').querySelector('.pv').innerHTML = `<img src="${url}">`; });
+    // chống bấm gửi 2 lần khi đang lưu ảnh
+    root.addEventListener('submit', e => { const b = e.target.querySelector('button.btn'); if (!b) return; if (b.disabled) { e.stopImmediatePropagation(); e.preventDefault(); return; } setTimeout(() => { b.disabled = true; setTimeout(() => { b.disabled = false; }, 1500); }); }, true);
     onOpen && onOpen(root, close);
     return close;
   }
   const photo = (label = 'Chụp ảnh hoá đơn / chứng từ') => `<div class="f"><label class="photo" data-photo><input type="file" accept="image/*" capture="environment"><div class="pv">${ic('camera')}<br>${label}</div></label></div>`;
   const routeSelect = (sel) => { const rs = myRoutes().filter(r => r.status !== 'Hủy').slice(0, 20); return `<div class="f"><label>Chuyến xe</label><select name="route"><option value="">— Không gắn chuyến —</option>${rs.map(r => `<option value="${r.id}" ${(sel ? sel.id === r.id : r.status === 'Đang chạy') ? 'selected' : ''}>${esc(r.code)} · ${U.date(r.pickup_date)} · ${esc(Store.label('location', r.to_location))}</option>`).join('')}</select></div>`; };
-  const photoVal = root => ($('[data-photo]', root) || {}).dataset?.v || '';
+  // Lưu ảnh vào IndexedDB, trả về mã tham chiếu để gắn vào bản ghi
+  const photoVal = async root => { const v = ($('[data-photo]', root) || {}).dataset?.v || ''; return v ? Store.Files.put(v) : ''; };
   const done = (close, msg) => { close(); toast(msg); render(); };
 
   const FORMS = {
@@ -175,9 +179,9 @@
         ${routeSelect(route)}
         <div class="f"><label>Nội dung</label><textarea name="desc" rows="2" placeholder="VD: Vé BOT Pháp Vân, bốc xếp tại kho..."></textarea></div>
         ${photo()}<button class="btn">Gửi đề nghị</button></form>`, (root, close) => {
-        $('#f', root).onsubmit = e => {
+        $('#f', root).onsubmit = async e => {
           e.preventDefault(); const f = new FormData(e.target); const amt = U.num(f.get('amt')); if (!amt) return toast('Nhập số tiền');
-          ins('cost_request', { code: Store.nextCode('cost_request', 'DN'), date: f.get('date'), vehicle_id: S.vehicle_id, driver_id: S.driver_id, route_id: f.get('route'), category_id: f.get('cat'), amount: amt, pay_method: f.get('pm'), description: f.get('desc') || Store.label('cost_category', f.get('cat')), image: photoVal(root), status: 'Chờ duyệt', approver: '' });
+          ins('cost_request', { code: Store.nextCode('cost_request', 'DN'), date: f.get('date'), vehicle_id: S.vehicle_id, driver_id: S.driver_id, route_id: f.get('route'), category_id: f.get('cat'), amount: amt, pay_method: f.get('pm'), description: f.get('desc') || Store.label('cost_category', f.get('cat')), image: (await photoVal(root)), status: 'Chờ duyệt', approver: '' });
           done(close, 'Đã gửi đề nghị — chờ duyệt');
         };
       });
@@ -193,9 +197,9 @@
         ${routeSelect()}${photo('Chụp hoá đơn đổ dầu')}<button class="btn">Lưu</button></form>`, (root, close) => {
         const form = $('#f', root); const calc = () => { $('#tt', root).value = U.money(Math.round((Number(form.l.value) || 0) * U.num(form.p.value))); };
         form.addEventListener('input', calc); calc();
-        form.onsubmit = e => {
+        form.onsubmit = async e => {
           e.preventDefault(); const f = new FormData(form); const km = Number(f.get('km')); const liters = Number(f.get('l')); const p = U.num(f.get('p'));
-          ins('route_fuel', { code: Store.nextCode('route_fuel', 'NL'), pay_type: f.get('pt'), pay_status: f.get('pt') === 'Tự thanh toán' ? 'Chưa thanh toán' : 'Đã thanh toán', date: U.today(), fuel_type: f.get('t'), liters, price: p, total: Math.round(liters * p), route_id: f.get('route'), vehicle_id: S.vehicle_id, driver_id: S.driver_id, km_old: v.odometer || '', km_now: km, station: f.get('st'), image: photoVal(root) });
+          ins('route_fuel', { code: Store.nextCode('route_fuel', 'NL'), pay_type: f.get('pt'), pay_status: f.get('pt') === 'Tự thanh toán' ? 'Chưa thanh toán' : 'Đã thanh toán', date: U.today(), fuel_type: f.get('t'), liters, price: p, total: Math.round(liters * p), route_id: f.get('route'), vehicle_id: S.vehicle_id, driver_id: S.driver_id, km_old: v.odometer || '', km_now: km, station: f.get('st'), image: (await photoVal(root)) });
           if (km > U.num(v.odometer)) Store.update('vehicle', v.id, { odometer: km }, me().name);
           done(close, 'Đã ghi nhận đổ nhiên liệu');
         };
@@ -210,9 +214,9 @@
         <div class="two"><div class="f"><label>Hình thức thu</label><select name="h"><option>Tài xế thu tiền mặt</option><option>Chuyển khoản</option><option>Công nợ</option></select></div><div class="f"><label>Ngày</label><input type="date" name="d" value="${U.today()}"></div></div>
         ${routeSelect()}<div class="f"><label>Ghi chú</label><input name="n"></div>${photo('Chụp biên nhận / phiếu giao hàng')}
         <button class="btn ok">Gửi xác nhận</button></form>`, (root, close) => {
-        $('#f', root).onsubmit = e => {
+        $('#f', root).onsubmit = async e => {
           e.preventDefault(); const f = new FormData(e.target); const a = U.num(f.get('a')); if (!a) return toast('Nhập số tiền');
-          ins('revenue', { code: Store.nextCode('revenue', 'DT'), date: f.get('d'), type: f.get('t'), vehicle_id: S.vehicle_id, driver_id: S.driver_id, customer_id: f.get('c'), route_id: f.get('route'), amount: a, vat: 'Không chịu thuế', total: a, collect: f.get('h'), status: 'Chờ xác nhận', note: f.get('n'), image: photoVal(root) });
+          ins('revenue', { code: Store.nextCode('revenue', 'DT'), date: f.get('d'), type: f.get('t'), vehicle_id: S.vehicle_id, driver_id: S.driver_id, customer_id: f.get('c'), route_id: f.get('route'), amount: a, vat: 'Không chịu thuế', total: a, collect: f.get('h'), status: 'Chờ xác nhận', note: f.get('n'), image: (await photoVal(root)) });
           done(close, 'Đã gửi doanh thu — chờ kế toán xác nhận');
         };
       });
@@ -224,9 +228,9 @@
         <div class="f"><label>Mô tả</label><textarea name="d" rows="3" required></textarea></div>
         <div class="f"><label>Thiệt hại ước tính (đ)</label><input class="money" name="a" inputmode="numeric"></div>
         ${photo('Chụp ảnh hiện trường')}<button class="btn">Gửi báo cáo</button></form>`, (root, close) => {
-        $('#f', root).onsubmit = e => {
+        $('#f', root).onsubmit = async e => {
           e.preventDefault(); const f = new FormData(e.target);
-          ins('incident', { code: Store.nextCode('incident', 'SC'), kind: f.get('k'), status: 'Chưa xử lý', target: f.get('k') === 'Hư hỏng hàng hóa' ? 'Hàng hóa' : 'Phương tiện', driver_id: S.driver_id, vehicle_id: S.vehicle_id, date: U.now(), place: f.get('p'), insurance: 'Không', damage: U.num(f.get('a')), description: f.get('d'), image: photoVal(root) });
+          ins('incident', { code: Store.nextCode('incident', 'SC'), kind: f.get('k'), status: 'Chưa xử lý', target: f.get('k') === 'Hư hỏng hàng hóa' ? 'Hàng hóa' : 'Phương tiện', driver_id: S.driver_id, vehicle_id: S.vehicle_id, date: U.now(), place: f.get('p'), insurance: 'Không', damage: U.num(f.get('a')), description: f.get('d'), image: (await photoVal(root)) });
           if (f.get('k') === 'Hỏng xe dọc đường') Store.update('vehicle', S.vehicle_id, { state: 'Xe hỏng' }, me().name);
           if (f.get('k') === 'Bị phạt / CSGT giữ') Store.update('vehicle', S.vehicle_id, { state: 'Xe công an giữ' }, me().name);
           done(close, 'Đã báo sự cố cho điều vận');
@@ -235,7 +239,7 @@
     },
     start(r) {
       sheet('Bắt đầu chuyến ' + esc(r.code), `<form id="f"><div class="f"><label>Km đồng hồ lúc xuất phát</label><input name="km" type="number" inputmode="numeric" value="${car().odometer || ''}" required></div><button class="btn">Bắt đầu</button></form>`, (root, close) => {
-        $('#f', root).onsubmit = e => {
+        $('#f', root).onsubmit = async e => {
           e.preventDefault(); const km = Number(new FormData(e.target).get('km'));
           Store.update('route', r.id, { status: 'Đang chạy', km_start: km, actual_start: U.now() }, me().name);
           Store.update('vehicle', S.vehicle_id, { state: 'Xe đang vận chuyển', odometer: Math.max(km, U.num(car().odometer)) }, me().name);
@@ -247,12 +251,12 @@
     end(r) {
       sheet('Hoàn thành chuyến ' + esc(r.code), `<form id="f"><div class="f"><label>Km đồng hồ khi kết thúc</label><input name="km" type="number" inputmode="numeric" required min="${r.km_start || 0}"></div>
         <div class="f"><label>Ghi chú giao hàng</label><input name="n"></div>${photo('Chụp biên bản giao hàng / POD')}<button class="btn ok">Hoàn thành</button></form>`, (root, close) => {
-        $('#f', root).onsubmit = e => {
+        $('#f', root).onsubmit = async e => {
           e.preventDefault(); const f = new FormData(e.target); const km = Number(f.get('km'));
           Store.update('route', r.id, { status: 'Hoàn thành', km_end: km, km_actual: Math.max(0, km - U.num(r.km_start)), actual_end: U.now(), drop_date: U.today(), note: [r.note, f.get('n')].filter(Boolean).join(' | ') }, me().name);
           Store.update('vehicle', S.vehicle_id, { state: 'Xe trống', odometer: Math.max(km, U.num(car().odometer)) }, me().name);
           (r.order_ids || []).forEach(id => Store.update('order', id, { status: 'Hoàn thành', drop_date: U.today() }, me().name));
-          const pod = photoVal(root); if (pod) (r.order_ids || []).forEach(id => ins('document', { code: Store.nextCode('document', 'CT'), order_id: id, name: 'POD chuyến ' + r.code, date: U.today(), image: pod }));
+          const pod = (await photoVal(root)); if (pod) (r.order_ids || []).forEach(id => ins('document', { code: Store.nextCode('document', 'CT'), order_id: id, name: 'POD chuyến ' + r.code, date: U.today(), image: pod }));
           done(close, 'Đã hoàn thành chuyến');
         };
       });
@@ -263,7 +267,7 @@
       sheet('Tạo chuyến mới', `<form id="f"><div class="f"><label>Loại chuyến</label><select name="t"><option>Chuyến có hàng</option><option>Chuyến rỗng</option></select></div>
         <div class="f"><label>Điểm đầu</label><select name="a" required><option value=""></option>${opt}</select></div><div class="f"><label>Điểm cuối</label><select name="b" required><option value=""></option>${opt}</select></div>
         <div class="f"><label>Ngày</label><input type="date" name="d" value="${U.today()}"></div><button class="btn">Tạo chuyến</button></form>`, (root, close) => {
-        $('#f', root).onsubmit = e => {
+        $('#f', root).onsubmit = async e => {
           e.preventDefault(); const f = new FormData(e.target);
           ins('route', { code: Store.nextCode('route', 'CX'), type: f.get('t'), status: 'Chưa bắt đầu', approve: 'Chưa phê duyệt', vehicle_id: S.vehicle_id, driver_id: S.driver_id, order_ids: [], from_location: f.get('a'), to_location: f.get('b'), pickup_date: f.get('d') });
           tab = 'trips'; sub = 'active'; done(close, 'Đã tạo chuyến');
@@ -272,6 +276,7 @@
     }
   };
 
-  window.addEventListener('storage', () => { if (S && !$('.sheet-bg')) render(); });
-  render();
+  // Văn phòng duyệt/sửa ở tab khác -> cập nhật lại màn hình
+  Store.onChange = () => { if (S && !$('.sheet-bg')) render(); };
+  Store.ready().then(render).catch(err => { $('#app').innerHTML = `<div class="empty">Không khởi động được dữ liệu: ${esc(err.message)}</div>`; console.error(err); });
 })();

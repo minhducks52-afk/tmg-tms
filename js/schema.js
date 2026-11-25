@@ -279,7 +279,7 @@
     { title: 'Khách hàng', icon: 'id', items: ['customer', 'project', 'contract', 'contact', 'customer_group'] },
     { title: 'Định mức', icon: 'cash', items: ['price_quote', 'quota', 'fuel_quota', 'payroll', 'route_tolls'] },
     { title: 'Danh mục', icon: 'list', items: ['location', 'goods_type', 'cost_category', 'transportation_type', 'department'] },
-    { title: 'Quản trị', icon: 'users', items: ['admin', 'role', 'activity_log'] },
+    { title: 'Quản trị', icon: 'users', items: ['admin', 'role', 'activity_log', { id: 'trash', title: 'Thùng rác', page: 'trash' }] },
     { title: 'Thiết lập', icon: 'gear', items: [{ id: 'settings', title: 'Thiết lập công ty', page: 'settings' }, { id: 'backup', title: 'Sao lưu / Khôi phục', page: 'backup' }] }
   ];
 

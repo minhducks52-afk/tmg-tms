@@ -32,7 +32,8 @@
   /* ---------- Helpers ---------- */
   const toast = msg => { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2200); };
   const session = () => Store.session();
-  const canApprove = () => { const s = session(); if (!s) return false; const u = Store.get('admin', s.id); const r = u && Store.get('role', u.role_id); return !r || r.approve_cost === 'Có'; };
+  // Phải có vai trò được cấp quyền duyệt (trước đây: không có vai trò cũng duyệt được)
+  const canApprove = () => { const s = session(); if (!s) return false; const u = Store.get('admin', s.id); const r = u && Store.get('role', u.role_id); return !!r && r.approve_cost === 'Có'; };
   const BADGE = {
     ok: ['Hoàn thành', 'Đã xác nhận', 'Đã duyệt', 'Đã chi', 'Đã thanh toán', 'Đã phê duyệt', 'Có', 'Đã thu tiền', 'Đã xử lý', 'Xe trống', 'Hoạt động', 'Đã tạo đơn'],
     warn: ['Chờ duyệt', 'Chờ xác nhận', 'Chờ tài xế xác nhận', 'Chờ nhận hàng', 'Chưa phê duyệt', 'Thanh toán chưa đủ', 'Đang xử lý', 'Chưa thanh toán', 'Gửi tài xế', 'Mới', 'Chưa xử lý'],
@@ -54,7 +55,7 @@
       case 'money': return U.money(v);
       case 'num': return v === '' ? '' : Number(v).toLocaleString('vi-VN');
       case 'date': case 'datetime': return U.date(v);
-      case 'image': return v ? `<img class="thumb" src="${v}" data-zoom>` : '';
+      case 'image': return Store.img(v, 'class="thumb" data-zoom');
       case 'password': return '••••';
       case 'select': return fd.badge ? chip(v) : esc(v);
       default: return esc(v);
@@ -82,7 +83,7 @@
   function markActive(key) {
     MENU.forEach((g, i) => { const ids = g.items ? g.items.map(x => typeof x === 'string' ? x : x.id) : [g.id]; if (ids.includes(key)) { const b = $$('.side .nav-btn')[i]; b && b.classList.add('active'); } });
   }
-  window.addEventListener('hashchange', route);
+  window.addEventListener('hashchange', () => Store.ready().then(route));
 
   /* ---------- Login ---------- */
   function renderLogin() {
@@ -239,7 +240,7 @@
         const id = a.closest('tr').dataset.id; const r = Store.get(mod.key, id); const act = a.dataset.a;
         if (act === 'edit') openForm(mod, r, draw);
         else if (act === 'dup') { const c = Object.assign({}, r); delete c.id; const cf = mod.fields.find(x => x.type === 'code'); if (cf) c[cf.k] = ''; openForm(mod, c, draw, true); }
-        else if (act === 'del') { if (confirm('Xoá bản ghi này?')) { Store.remove(mod.key, id); st.sel.delete(id); toast('Đã xoá'); draw(); refreshBell(); } }
+        else if (act === 'del') { if (confirm('Chuyển bản ghi này vào thùng rác? (Có thể khôi phục trong Quản trị → Thùng rác)')) { Store.remove(mod.key, id); st.sel.delete(id); toast('Đã chuyển vào thùng rác'); draw(); refreshBell(); } }
         else if (ROW_ACTIONS[act]) ROW_ACTIONS[act].run(r, draw);
       });
       $$('#g tbody tr[data-id]').forEach(tr => tr.ondblclick = () => !ro && openForm(mod, Store.get(mod.key, tr.dataset.id), draw));
@@ -250,7 +251,7 @@
     if ($('#add')) $('#add').onclick = () => openForm(mod, null, draw);
     $('#csv').onclick = () => exportCSV(mod, filtered(mod, st));
     $('#prt').onclick = () => window.print();
-    $('#bdel').onclick = () => { if (confirm(`Xoá ${st.sel.size} bản ghi đã chọn?`)) { st.sel.forEach(id => Store.remove(mod.key, id)); st.sel.clear(); toast('Đã xoá'); draw(); } };
+    $('#bdel').onclick = () => { if (confirm(`Chuyển ${st.sel.size} bản ghi đã chọn vào thùng rác?`)) { st.sel.forEach(id => Store.remove(mod.key, id)); st.sel.clear(); toast('Đã chuyển vào thùng rác'); draw(); refreshBell(); } };
     (mod.headerActions || []).forEach(a => { const b = $('#ha_' + a); if (b) b.onclick = () => HEADER_ACTIONS[a].run(draw); });
     content.onclick = e => { const img = e.target.closest('[data-zoom]'); if (img) showImage(img.src); };
     draw();
@@ -298,7 +299,7 @@
       case 'date': inp = `<input ${name} type="date" value="${esc(String(v || '').slice(0, 10))}" ${r}>`; break;
       case 'datetime': inp = `<input ${name} type="datetime-local" value="${esc(v)}" ${r}>`; break;
       case 'password': inp = `<input ${name} type="password" value="${esc(v)}" autocomplete="new-password">`; break;
-      case 'image': inp = `<div class="img-field"><input type="file" accept="image/*" data-img="${fd.k}"><input type="hidden" ${name} value="${esc(v)}"><img ${v ? `src="${v}"` : 'style="display:none"'} data-prev="${fd.k}">${v ? `<a data-clr="${fd.k}">Xoá ảnh</a>` : ''}</div>`; break;
+      case 'image': inp = `<div class="img-field"><input type="file" accept="image/*" data-img="${fd.k}"><input type="hidden" ${name} value="${esc(v)}">${v ? Store.img(v, `data-prev="${fd.k}"`) : `<img style="display:none" data-prev="${fd.k}">`}${v ? `<a data-clr="${fd.k}">Xoá ảnh</a>` : ''}</div>`; break;
       case 'code': inp = `<input ${name} value="${esc(v)}" placeholder="Tự động" ${r}>`; break;
       default: inp = `<input ${name} value="${esc(v)}" ${r}>`;
     }
@@ -333,7 +334,8 @@
         form.addEventListener('change', recalc);
         $$('[data-img]', form).forEach(inp => inp.onchange = async () => {
           const file = inp.files[0]; if (!file) return; const url = await U.resizeImage(file);
-          form.elements[inp.dataset.img].value = url; const pv = $(`[data-prev="${inp.dataset.img}"]`, form); pv.src = url; pv.style.display = '';
+          const ref = await Store.Files.put(url);
+          form.elements[inp.dataset.img].value = ref; const pv = $(`[data-prev="${inp.dataset.img}"]`, form); pv.src = url; pv.style.display = '';
         });
         $$('[data-clr]', form).forEach(a => a.onclick = () => { form.elements[a.dataset.clr].value = ''; $(`[data-prev="${a.dataset.clr}"]`, form).style.display = 'none'; });
         let more = false; $$('button[type=submit]', form).forEach(b => b.onclick = () => { more = b.hasAttribute('data-more'); });
@@ -418,7 +420,7 @@
   function reviewModal(title, r, rows, img, done) {
     modal(`<div class="modal sm"><div class="modal-h"><h3>${title}</h3><button class="x" data-close>×</button></div>
       <div class="modal-b"><table class="grid" style="width:100%">${rows.map(x => `<tr><td style="color:var(--ink-2);width:120px">${x[0]}</td><td style="white-space:normal">${x[1] || ''}</td></tr>`).join('')}</table>
-      ${img ? `<div style="margin-top:10px"><img src="${img}" style="max-width:100%;border-radius:6px"></div>` : ''}
+      ${img ? `<div style="margin-top:10px">${Store.img(img, 'style="max-width:100%;border-radius:6px"')}</div>` : ''}
       <div class="field" style="margin-top:12px"><label>Lý do (khi từ chối)</label><input id="rr"></div></div>
       <div class="modal-f"><button class="btn" id="rj" style="color:var(--bad)">${ic('x')} Từ chối</button><button class="btn ok" id="ap">${ic('check')} Duyệt / Xác nhận</button></div></div>`,
       (root, close) => {
@@ -606,25 +608,49 @@
       $('#sf', el).onsubmit = e => { e.preventDefault(); Store.saveSettings(Object.fromEntries(new FormData(e.target))); toast('Đã lưu'); $('.co').textContent = Store.settings().company; };
     },
 
-    backup(el) {
-      const size = (Store.exportJSON().length / 1024).toFixed(0);
+    async backup(el) {
+      const kb = n => (n / 1024).toLocaleString('vi-VN', { maximumFractionDigits: 0 }) + ' KB';
+      const dlFile = async () => download('tmg_tms_backup_' + U.today() + '.json', await Store.exportJSON(), 'application/json');
+      const list = await Store.Backups.list();
       el.innerHTML = `<div class="ph"><h1>Sao lưu / Khôi phục dữ liệu</h1></div><div class="pad">
-        <div class="card"><h3>Sao lưu</h3><p>Dữ liệu hiện lưu trong trình duyệt của máy này (${size} KB). Nên sao lưu định kỳ và khi chuyển máy.</p><button class="btn primary" id="ex">${ic('dl')} Tải file sao lưu (.json)</button></div>
-        <div class="card"><h3>Khôi phục</h3><p>Nạp file sao lưu sẽ <b>ghi đè</b> toàn bộ dữ liệu hiện tại.</p><input type="file" accept=".json" id="im"></div>
-        <div class="card"><h3>Dữ liệu mẫu</h3><p>Xoá toàn bộ dữ liệu và tạo lại dữ liệu mẫu (5 xe, 6 tháng phát sinh). Dùng khi muốn dùng thử lại từ đầu.</p><button class="btn" id="rs" style="color:var(--bad)">Khởi tạo lại dữ liệu mẫu</button>
+        ${Store.isLegacy() ? '<div class="card" style="border-color:var(--bad)"><b>Trình duyệt này không hỗ trợ IndexedDB</b> — đang chạy chế độ dự phòng, không có sao lưu tự động. Hãy tải file sao lưu thường xuyên.</div>' : ''}
+        <div class="card"><h3>Tải file sao lưu</h3><p>Dữ liệu chữ đang dùng ${kb(Store.usage())} bộ nhớ trình duyệt; ảnh chứng từ lưu riêng trong IndexedDB. File tải về gồm cả ảnh. Nên tải định kỳ và khi chuyển máy.</p><button class="btn primary" id="ex">${ic('dl')} Tải file sao lưu (.json)</button></div>
+        <div class="card"><h3>Bản sao lưu tự động trên máy này</h3><p>Hệ thống tự lưu 1 bản mỗi ngày (giữ 10 bản gần nhất) và trước mọi thao tác ghi đè (khôi phục, khởi tạo lại, xoá sạch, nâng cấp dữ liệu).</p>
+          <button class="btn" id="snap">Tạo bản sao lưu ngay</button>
+          <table class="grid" style="width:100%;margin-top:10px"><thead><tr><th>Thời điểm</th><th>Lý do</th><th class="num">Kích thước</th><th></th></tr></thead><tbody>
+          ${list.map(b => `<tr><td>${U.date(b.at)}</td><td>${esc(b.reason)}</td><td class="num">${kb(b.size)}</td><td><a data-dl="${b.id}">Tải về</a> · <a data-rs="${b.id}">Khôi phục</a></td></tr>`).join('') || '<tr><td colspan="4"><div class="empty">Chưa có bản sao lưu</div></td></tr>'}</tbody></table></div>
+        <div class="card"><h3>Khôi phục từ file</h3><p>Nạp file sẽ <b>thay thế</b> dữ liệu hiện tại (hệ thống tự sao lưu bản hiện tại trước). Nhận cả file sao lưu của phiên bản cũ.</p><input type="file" accept=".json" id="im"></div>
+        <div class="card"><h3>Dữ liệu mẫu</h3><p>Hai thao tác dưới sẽ <b>bắt buộc tải file sao lưu</b> về máy trước khi thực hiện.</p><button class="btn" id="rs" style="color:var(--bad)">Khởi tạo lại dữ liệu mẫu</button>
         <button class="btn" id="clr" style="color:var(--bad)">Xoá sạch, bắt đầu dữ liệu thật</button></div></div>`;
-      $('#ex', el).onclick = () => download('tmg_tms_backup_' + U.today() + '.json', Store.exportJSON(), 'application/json');
-      $('#im', el).onchange = async e => { const f = e.target.files[0]; if (!f) return; if (!confirm('Ghi đè toàn bộ dữ liệu hiện tại bằng file này?')) return; try { Store.importJSON(await f.text()); toast('Đã khôi phục'); setTimeout(() => location.reload(), 600); } catch (err) { alert('Lỗi: ' + err.message); } };
-      $('#rs', el).onclick = () => { if (confirm('Xoá toàn bộ dữ liệu hiện tại và tạo lại dữ liệu mẫu?')) { Store.reset(); Store.clearSession(); location.reload(); } };
-      $('#clr', el).onclick = () => {
-        if (!confirm('Xoá sạch tất cả giao dịch, xe, tài xế, khách hàng? (Giữ lại người dùng, vai trò, khoản mục chi phí, chủng loại xe). Không thể hoàn tác nếu chưa sao lưu.')) return;
-        const keep = ['admin', 'role', 'cost_category', 'vehicle_group', 'department', 'settings', '__v', '__seq'];
-        const d = JSON.parse(Store.exportJSON()); Object.keys(d).forEach(k => { if (!keep.includes(k)) delete d[k]; }); d.__seq = {};
-        Store.importJSON(JSON.stringify(d)); toast('Đã xoá dữ liệu'); setTimeout(() => location.reload(), 600);
+      const reload = () => setTimeout(() => location.reload(), 700);
+      $('#ex', el).onclick = dlFile;
+      $('#snap', el).onclick = async () => { await Store.Backups.snapshot('Thủ công'); toast('Đã tạo bản sao lưu'); PAGES.backup(el); };
+      $$('[data-dl]', el).forEach(a => a.onclick = async () => { const b = await Store.Backups.get(a.dataset.dl); download('tmg_tms_backup_' + b.at.replace(/[:T]/g, '-') + '.json', b.data, 'application/json'); });
+      $$('[data-rs]', el).forEach(a => a.onclick = async () => { if (!confirm('Khôi phục dữ liệu về bản sao lưu này? (Bản hiện tại sẽ được sao lưu tự động trước)')) return; try { await Store.restoreBackup(a.dataset.rs); toast('Đã khôi phục'); reload(); } catch (err) { alert('Lỗi: ' + err.message); } });
+      $('#im', el).onchange = async e => { const f = e.target.files[0]; if (!f) return; if (!confirm('Thay thế toàn bộ dữ liệu hiện tại bằng file này? (Bản hiện tại sẽ được sao lưu tự động trước)')) return; try { await Store.importJSON(await f.text()); toast('Đã khôi phục'); reload(); } catch (err) { alert('Lỗi: ' + err.message); } };
+      $('#rs', el).onclick = async () => { if (!confirm('Tải file sao lưu về máy, sau đó xoá dữ liệu hiện tại và tạo lại dữ liệu mẫu?')) return; await dlFile(); await Store.reset(); Store.clearSession(); reload(); };
+      $('#clr', el).onclick = async () => {
+        if (!confirm('Tải file sao lưu về máy, sau đó xoá sạch giao dịch, xe, tài xế, khách hàng? (Giữ lại người dùng, vai trò, khoản mục chi phí, chủng loại xe, phòng ban)')) return;
+        await dlFile(); await Store.wipe(['admin', 'role', 'cost_category', 'vehicle_group', 'department']); toast('Đã xoá dữ liệu'); reload();
       };
+    },
+
+    trash(el) {
+      const items = Store.trash();
+      el.innerHTML = `<div class="ph"><h1>Thùng rác</h1><div class="note">Bản ghi bị xoá được giữ ở đây và không tính vào báo cáo. Khôi phục để dùng lại; "Xoá vĩnh viễn" không thể hoàn tác.</div></div>
+        <div class="pad"><div class="card" style="padding:0;overflow:auto"><table class="grid" style="width:100%"><thead><tr><th>Module</th><th>Bản ghi</th><th>Xoá lúc</th><th>Người xoá</th><th></th></tr></thead><tbody>
+        ${items.map(({ col, rec }) => `<tr><td>${esc(M[col] ? M[col].title : col)}</td><td>${esc(rec.code || rec.plate || rec.name || rec.order_no || rec.username || rec.id)}</td><td>${U.date(rec._deleted)}</td><td>${esc(rec._deleted_by)}</td><td><a data-r="${col}|${rec.id}">Khôi phục</a> · <a data-p="${col}|${rec.id}" style="color:var(--bad)">Xoá vĩnh viễn</a></td></tr>`).join('') || '<tr><td colspan="5"><div class="empty">Thùng rác trống</div></td></tr>'}</tbody></table></div></div>`;
+      $$('[data-r]', el).forEach(a => a.onclick = () => { const [c, id] = a.dataset.r.split('|'); Store.restore(c, id); toast('Đã khôi phục'); PAGES.trash(el); refreshBell(); });
+      $$('[data-p]', el).forEach(a => a.onclick = () => { const [c, id] = a.dataset.p.split('|'); if (confirm('Xoá vĩnh viễn bản ghi này? Không thể hoàn tác (trừ khi khôi phục từ bản sao lưu).')) { Store.purge(c, id); toast('Đã xoá vĩnh viễn'); PAGES.trash(el); } });
     }
   };
   PAGES.rpt_vehicle = PAGES.rptVehicle; PAGES.rpt_month = PAGES.rptMonth; PAGES.rpt_cat = PAGES.rptCat; PAGES.rpt_expiry = PAGES.rptExpiry;
 
-  route();
+  // Tab khác (VD: App tài xế) vừa ghi dữ liệu -> vẽ lại nếu người dùng không đang nhập liệu
+  Store.onChange = () => {
+    refreshBell();
+    const busy = $('#modal-root').children.length || (document.activeElement && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName));
+    if (!busy && session() && $('.layout')) route();
+  };
+  Store.ready().then(route).catch(err => { $('#app').innerHTML = `<div class="empty">Không khởi động được dữ liệu: ${esc(err.message)}</div>`; console.error(err); });
 })();
