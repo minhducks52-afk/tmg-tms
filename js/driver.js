@@ -22,6 +22,20 @@
 
   let S = null; try { S = JSON.parse(localStorage.getItem(SKEY)); } catch (e) {}
   let tab = 'home', sub = null;
+  // Chế độ sáng/tối: tự động theo điện thoại, hoặc chọn tay trong tab Cá nhân
+  const THEME_KEY = 'tmg_driver_theme';
+  const applyTheme = () => { const t = localStorage.getItem(THEME_KEY) || 'auto'; if (t === 'auto') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t; };
+  applyTheme();
+  // Thông báo khi văn phòng duyệt / từ chối / xác nhận
+  const seenKey = () => SKEY + ':seen:' + S.driver_id;
+  const seenAt = () => { let v = localStorage.getItem(seenKey()); if (!v) { v = U.stamp(); localStorage.setItem(seenKey(), v); } return v; };
+  const markSeen = () => localStorage.setItem(seenKey(), U.stamp());
+  function updates() {
+    const since = seenAt(), name = me().name, out = [];
+    Store.all('cost_request').forEach(r => { if (r.vehicle_id === S.vehicle_id && r.updated_at > since && r.updated_by !== name && ['Đã duyệt', 'Từ chối', 'Đã chi'].includes(r.status)) out.push(r); });
+    Store.all('revenue').forEach(r => { if (r.vehicle_id === S.vehicle_id && r.updated_at > since && r.updated_by !== name && ['Đã xác nhận', 'Từ chối'].includes(r.status)) out.push(r); });
+    return out.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+  }
   const me = () => Store.get('driver', S.driver_id);
   const car = () => Store.get('vehicle', S.vehicle_id);
   const ins = (col, rec) => Store.insert(col, Object.assign({ source: 'App' }, rec), me().name);
@@ -29,7 +43,7 @@
   /* ---------- Login ---------- */
   function login() {
     const vehs = Store.all('vehicle').filter(v => v.active !== 'Không hoạt động');
-    $('#app').innerHTML = `<div class="login"><div class="hero"><div class="logo">${ic('truck')}</div><h1>TMG Driver</h1><div>App tài xế theo đầu xe</div></div>
+    $('#app').innerHTML = `<div class="login"><div class="hero"><div class="logo">${ic('truck')}</div><h1>TMG Driver</h1><p>App tài xế theo đầu xe · ${esc(Store.settings().company || '')}</p></div>
       <form class="panel" id="lf">
         <div class="f"><label>Biển số xe</label><select name="v" required><option value="">— Chọn xe —</option>${vehs.map(v => `<option value="${v.id}">${esc(v.plate)}</option>`).join('')}</select></div>
         <div class="f"><label>Số điện thoại</label><input name="p" type="tel" inputmode="tel" required autocomplete="tel"></div>
@@ -56,13 +70,15 @@
     const ym = U.today().slice(0, 7); const [y, m] = ym.split('-').map(Number);
     const fin = Store.finance({ from: ym + '-01', to: ym + '-' + new Date(y, m, 0).getDate(), vehicle: S.vehicle_id });
     const trips = Store.all('route').filter(r => r.vehicle_id === S.vehicle_id && U.month(r.pickup_date) === ym && r.status !== 'Hủy').length;
+    const nUpd = tab === 'money' ? 0 : updates().length;
     $('#app').innerHTML = `<div class="wrap">
       <div class="hdr"><div class="row"><span class="plate">${esc(car().plate)}</span><div class="who"><b>${esc(me().name)}</b><br><small>${esc(Store.label('vehicle_group', car().group_id))}</small></div><button class="out" id="lo" title="Kết thúc ca">${ic('logout')}</button></div></div>
       <div class="stats"><div class="stat"><div class="l">Doanh thu T${m}</div><div class="v">${short(fin.revenue)}</div></div><div class="stat"><div class="l">Chi phí T${m}</div><div class="v">${short(fin.cost)}</div></div><div class="stat"><div class="l">Chuyến T${m}</div><div class="v">${trips}</div></div></div>
       <div id="view"></div></div>
-      <nav class="nav"><div class="in">${[['home', 'home', 'Trang chủ'], ['trips', 'route', 'Chuyến'], ['new', 'plus', ''], ['money', 'wallet', 'Thu chi'], ['me', 'user', 'Cá nhân']].map(([k, i, l]) => k === 'new' ? `<button class="fab" data-t="new"><span>${ic('plus')}</span></button>` : `<button data-t="${k}" class="${tab === k ? 'on' : ''}">${ic(i)}${l}</button>`).join('')}</div></nav>`;
+      <nav class="nav"><div class="in">${[['home', 'home', 'Trang chủ'], ['trips', 'route', 'Chuyến'], ['new', 'plus', ''], ['money', 'wallet', 'Thu chi'], ['me', 'user', 'Cá nhân']].map(([k, i, l]) => k === 'new' ? `<button class="fab" data-t="new"><span>${ic('plus')}</span></button>` : `<button data-t="${k}" class="${tab === k ? 'on' : ''}">${ic(i)}${l}${k === 'money' && nUpd ? `<span class="bd">${nUpd}</span>` : ''}</button>`).join('')}</div></nav>`;
     $('#lo').onclick = () => { if (confirm('Kết thúc ca và đăng xuất?')) { localStorage.removeItem(SKEY); S = null; render(); } };
     $$('.nav button').forEach(b => b.onclick = () => { if (b.dataset.t === 'new') return newMenu(); tab = b.dataset.t; sub = null; render(); });
+    if (tab === 'money') markSeen();
     VIEWS[tab]($('#view'));
   }
 
@@ -103,7 +119,9 @@
     home(el) {
       const act = myRoutes().filter(r => r.status === 'Đang chạy' || r.status === 'Chưa bắt đầu').sort((a, b) => (a.status === 'Đang chạy' ? -1 : 1));
       const pend = Store.all('cost_request').filter(r => r.vehicle_id === S.vehicle_id && r.status === 'Chờ duyệt');
-      el.innerHTML = `<div class="sec"><h2>Thao tác nhanh</h2></div>${quick()}
+      const upd = updates();
+      el.innerHTML = `${upd.length ? `<div class="sec"><h2>Văn phòng vừa xử lý (${upd.length})</h2><a data-tab="money">Đã xem</a></div>${upd.slice(0, 4).map(r => `<div class="card new"><div class="t"><div><b>${esc(r.code)}</b> · ${esc(r.category_id ? Store.label('cost_category', r.category_id) : r.type)}<div class="m">${esc(r.updated_by)} · ${U.date(r.updated_at)}${r.reject_reason ? '<br>Lý do: ' + esc(r.reject_reason) : ''}</div></div><div style="text-align:right"><div class="amt">${U.money(r.amount)}</div>${chip(r.status)}</div></div></div>`).join('')}` : ''}
+        <div class="sec"><h2>Thao tác nhanh</h2></div>${quick()}
         <div class="sec"><h2>Chuyến hiện tại</h2><a data-tab="trips">Tất cả</a></div>
         ${act.length ? act.slice(0, 3).map(routeCard).join('') : `<div class="card empty">Chưa có chuyến được giao<br><button class="btn sm ghost" style="margin:10px auto 0" id="selfroute">+ Tự tạo chuyến</button></div>`}
         ${pend.length ? `<div class="sec"><h2>Đang chờ duyệt (${pend.length})</h2><a data-tab="money">Xem</a></div><div class="card"><div class="t"><span>${pend.length} đề nghị chi phí</span><b class="amt">${U.money(pend.reduce((s, r) => s + U.num(r.amount), 0))} đ</b></div></div>` : ''}
@@ -134,12 +152,15 @@
       const d = me(), v = car();
       const sal = Store.all('salary').filter(s => s.driver_id === d.id).slice(0, 6);
       const adv = Store.all('cost_request').filter(r => r.driver_id === d.id && r.pay_method === 'Tài xế ứng trước' && r.status === 'Đã duyệt').reduce((s, r) => s + U.num(r.amount), 0);
-      const row = (l, val) => `<div class="t" style="padding:6px 0;border-bottom:1px solid var(--line)"><span style="color:var(--ink-2)">${l}</span><b>${val || '—'}</b></div>`;
+      const row = (l, val) => `<div class="kv"><span>${l}</span><b>${val || '—'}</b></div>`;
+      const th = localStorage.getItem(THEME_KEY) || 'auto';
       el.innerHTML = `<div class="sec"><h2>Tài xế</h2></div><div class="card">${row('Họ tên', esc(d.name))}${row('Mã', esc(d.code))}${row('Điện thoại', esc(d.phone))}${row('Bằng lái', esc(d.license_class))}${row('Hạn GPLX', U.date(d.license_exp))}</div>
         <div class="card"><div class="t"><span>Công ty còn nợ bạn (đã duyệt, chưa chi)</span><b class="amt">${U.money(adv)} đ</b></div></div>
         <div class="sec"><h2>Xe ${esc(v.plate)}</h2></div><div class="card">${row('Chủng loại', esc(Store.label('vehicle_group', v.group_id)))}${row('Số km', U.money(v.odometer))}${row('Hạn đăng kiểm', U.date(v.inspection_exp))}${row('Hạn bảo hiểm', U.date(v.insurance_exp))}${row('Định mức dầu', v.fuel_norm ? v.fuel_norm + ' L/100km' : '')}</div>
         <div class="sec"><h2>Bảng lương</h2></div>${sal.map(s => `<div class="card"><div class="t"><span>Tháng ${esc(s.month)}</span><div style="text-align:right"><b class="amt">${U.money(s.total)}</b><br>${chip(s.status)}</div></div>${s.status === 'Gửi tài xế' ? `<div class="acts"><button class="btn sm ok" data-sal="${s.id}">Xác nhận lương</button></div>` : ''}</div>`).join('') || '<div class="empty">Chưa có bảng lương</div>'}
-        <div style="margin:16px 12px"><button class="btn ghost" id="pin">Đổi mã PIN</button></div>`;
+        <div class="sec"><h2>Giao diện</h2></div><div class="tabs" id="thm">${[['auto', 'Theo điện thoại'], ['light', 'Sáng'], ['dark', 'Tối']].map(([k, l]) => `<button data-th="${k}" class="${th === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+        <div style="margin:16px 14px"><button class="btn ghost" id="pin">Đổi mã PIN</button></div>`;
+      $$('[data-th]', el).forEach(b => b.onclick = () => { localStorage.setItem(THEME_KEY, b.dataset.th); applyTheme(); VIEWS.me(el); });
       $$('[data-sal]', el).forEach(b => b.onclick = () => { Store.update('salary', b.dataset.sal, { status: 'Đã xác nhận' }, d.name); toast('Đã xác nhận bảng lương'); render(); });
       $('#pin', el).onclick = () => sheet('Đổi mã PIN', `<form id="pf"><div class="f"><label>PIN hiện tại</label><input name="o" type="password" inputmode="numeric" required></div><div class="f"><label>PIN mới (4-8 số)</label><input name="n" type="password" inputmode="numeric" pattern="\\d{4,8}" required></div><button class="btn">Lưu</button></form>`, (root, close) => {
         $('#pf', root).onsubmit = async e => { e.preventDefault(); const f = new FormData(e.target); if (f.get('o') !== String(d.pin)) return toast('PIN hiện tại không đúng'); Store.update('driver', d.id, { pin: f.get('n') }, d.name); close(); toast('Đã đổi PIN'); };

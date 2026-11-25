@@ -21,6 +21,8 @@
     uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); },
     today() { const d = new Date(); return new Date(d - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 10); },
     now() { const d = new Date(); return new Date(d - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 16); },
+    // Dấu thời gian bản ghi (giờ địa phương, tới giây)
+    stamp() { const d = new Date(); return new Date(d - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 19); },
     money(v) { const n = Number(v) || 0; return n.toLocaleString('vi-VN'); },
     // Số kiểu VN: "1.250.000" hoặc "12,5" -> 1250000 / 12.5
     num(v) { if (typeof v === 'number') return isFinite(v) ? v : 0; return Number(String(v ?? '').replace(/[^\d,-]/g, '').replace(',', '.')) || 0; },
@@ -180,7 +182,7 @@
   const Backups = {
     async add(reason, text, extra = {}) {
       if (legacy) return null;
-      const rec = Object.assign({ id: 'bk_' + Date.now().toString(36) + U.uid().slice(-3), at: U.now(), reason, size: text.length, kind: 'manual', data: text }, extra);
+      const rec = Object.assign({ id: 'bk_' + Date.now().toString(36) + U.uid().slice(-3), at: U.stamp(), reason, size: text.length, kind: 'manual', data: text }, extra);
       await tx('backups', 'readwrite', s => s.put(rec));
       await Backups.prune(); return rec;
     },
@@ -242,19 +244,19 @@
       return prefix + U.pad(n);
     },
     insert(c, rec, user) {
-      const r = Object.assign({ id: U.uid() }, rec, { created_at: U.now(), created_by: user || Store.userName(), updated_at: '', updated_by: '' });
+      const r = Object.assign({ id: U.uid() }, rec, { created_at: U.stamp(), created_by: user || Store.userName(), updated_at: '', updated_by: '' });
       persist(c, [r]); log('Thêm', c, r, user); return r;
     },
     update(c, id, patch, user) {
       refresh(c);
       const r = col(c).find(x => x.id === id); if (!r) return null;
-      Object.assign(r, patch, { updated_at: U.now(), updated_by: user || Store.userName() });
+      Object.assign(r, patch, { updated_at: U.stamp(), updated_by: user || Store.userName() });
       persist(c, [r]); log('Sửa', c, r, user); return r;
     },
     remove(c, id, user) { // xoá mềm -> thùng rác
       refresh(c);
       const r = col(c).find(x => x.id === id); if (!r || r._deleted) return;
-      Object.assign(r, { _deleted: U.now(), _deleted_by: user || Store.userName() });
+      Object.assign(r, { _deleted: U.stamp(), _deleted_by: user || Store.userName() });
       persist(c, [r]); log('Xoá', c, r, user);
     },
     restore(c, id, user) {
@@ -303,7 +305,7 @@
   };
   function log(action, c, r, user) {
     if (c === 'activity_log') return;
-    const e = { id: U.uid(), time: U.now(), user: user || Store.userName(), action, module: c, record: (r && (r.code || r.plate || r.name || r.order_no || r.id)) || '' };
+    const e = { id: U.uid(), time: U.stamp(), user: user || Store.userName(), action, module: c, record: (r && (r.code || r.plate || r.name || r.order_no || r.id)) || '' };
     try { persist('activity_log', [e]); } catch (err) { /* nhật ký không được chặn thao tác chính */ }
   }
 

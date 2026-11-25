@@ -146,7 +146,7 @@
       const routes = Object.keys(WA.TMG_MODULES).map(k => 'm/' + k).concat(['p/dashboard', 'p/board', 'p/rpt_vehicle', 'p/rpt_vehicle/' + SA.all('vehicle')[0].id, 'p/rpt_month', 'p/rpt_cat', 'p/rpt_expiry', 'p/settings', 'p/backup', 'p/trash']);
       for (const r of routes) {
         WA.location.hash = '#/' + r; await sleep(r === 'p/backup' ? 250 : 40);
-        if (!WA.document.querySelector('.ph h1')) fails.push('Không hiển thị ' + r);
+        if (!WA.document.querySelector('.page-head h1')) fails.push('Không hiển thị ' + r);
         if (r.startsWith('m/')) { const add = WA.document.querySelector('#add'); if (add) { add.click(); if (!WA.document.querySelector('#mf')) fails.push('Không mở form ' + r); const c = WA.document.querySelector('[data-close]'); c && c.click(); } }
       }
       ok(!fails.length && !A.errors.length, fails.concat(A.errors).join('\n'));
@@ -161,6 +161,28 @@
       btn.click(); await sleep(50);
       ok(/không có quyền/.test(msg), 'Không chặn: ' + msg); eq(SA.get('cost_request', id).status, before);
       const adm = SA.all('admin').find(a => a.username === 'admin'); SA.setSession({ id: adm.id, name: adm.name, username: adm.username });
+    });
+
+    await t('Giao diện mới: tab trạng thái, duyệt hàng loạt, xem chi tiết, tìm nhanh Ctrl+K', async () => {
+      const d = WA.document; WA.confirm = () => true;
+      WA.location.hash = '#/m/cost_request?s=Chờ duyệt'; await sleep(150);
+      const ids = [...d.querySelectorAll('#g tbody tr[data-id]')].map(tr => tr.dataset.id);
+      ok(ids.length && ids.every(id => SA.get('cost_request', id).status === 'Chờ duyệt'), 'Tab trạng thái lọc sai');
+      const pick = ids.slice(0, 3);
+      for (const id of pick) { const cb = d.querySelector(`#g tr[data-id="${id}"] .cs`); cb.checked = true; cb.dispatchEvent(new WA.Event('change')); }
+      const bb = d.querySelector('[data-b="approveCost"]'); ok(bb, 'Không có nút duyệt hàng loạt'); bb.click(); await sleep(50);
+      eq(pick.map(id => SA.get('cost_request', id).status), pick.map(() => 'Đã duyệt'), 'Duyệt hàng loạt');
+      d.querySelector('#g tbody tr[data-id] td:nth-child(2)').click(); await sleep(50);
+      ok(d.querySelector('.drawer'), 'Không mở được trang chi tiết'); d.querySelector('.drawer [data-close]').click();
+      const v = SA.all('vehicle')[1];
+      WA.location.hash = '#/m/vehicle?id=' + v.id; await sleep(150);
+      ok(d.querySelector('.drawer .rel'), 'Chi tiết xe không có mục liên quan');
+      d.dispatchEvent(new WA.KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true })); await sleep(30);
+      const inp = d.querySelector('.palette input'); ok(inp, 'Không mở Ctrl+K');
+      inp.value = v.plate; inp.dispatchEvent(new WA.Event('input')); await sleep(30);
+      ok([...d.querySelectorAll('.palette .it')].some(x => x.textContent.includes(v.plate)), 'Tìm nhanh không ra biển số');
+      WA.document.querySelector('#modal-root').innerHTML = '';
+      ok(!A.errors.length, A.errors.join('\n'));
     });
 
     // App tài xế
@@ -190,6 +212,19 @@
     await t('Văn phòng thấy ngay đề nghị tài xế vừa gửi (đồng bộ giữa các tab)', async () => {
       await sleep(100);
       const c = SD.all('cost_request')[0]; ok(SA.get('cost_request', c.id), 'Tab quản trị chưa thấy bản ghi mới');
+    });
+
+    await t('Tài xế nhận thông báo khi văn phòng duyệt đề nghị', async () => {
+      await sleep(1100); // dấu thời gian tính tới giây
+      const c = SD.all('cost_request')[0];
+      SA.update('cost_request', c.id, { status: 'Đã duyệt', approver: 'Kế toán' }, 'Kế toán');
+      await sleep(250);
+      ok(WD.document.querySelector('.nav .bd'), 'Không có huy hiệu thông báo trên tab Thu chi');
+      ok(WD.document.body.innerText.includes('Văn phòng vừa xử lý'), 'Trang chủ không hiện mục cập nhật');
+      WD.document.querySelector('.nav [data-t="money"]').click(); await sleep(50);
+      WD.document.querySelector('.nav [data-t="home"]').click(); await sleep(50);
+      ok(!WD.document.querySelector('.nav .bd'), 'Đã xem nhưng vẫn còn huy hiệu');
+      ok(!D.errors.length, D.errors.join('\n'));
     });
 
     await t('Sao lưu ra file rồi khôi phục sang máy khác: đủ dữ liệu và ảnh', async () => {
