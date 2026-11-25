@@ -10,12 +10,19 @@
   const qs = new URLSearchParams(global.location ? location.search : '');
   const NS = String(global.TMG_DB_NS || qs.get('db') || '').replace(/[^\w-]/g, '');
   const SUF = NS ? '_' + NS : '';
-  const P = 'tmg_tms_v2' + SUF + ':';
+  // Chế độ máy chủ (Supabase): bật khi có js/config.js; ?local=1 hoặc vùng thử nghiệm (?db=) luôn chạy trên máy
+  const CLOUD_CFG = global.TMG_CLOUD || null;
+  const CLOUD_ON = !!(CLOUD_CFG && CLOUD_CFG.url && CLOUD_CFG.anonKey && !NS && qs.get('local') !== '1');
+  const LOCAL_P = 'tmg_tms_v2' + SUF + ':';   // dữ liệu chạy trên máy
+  const P = CLOUD_ON ? 'tmg_tms_cloud:' : LOCAL_P;  // bản sao (cache) dữ liệu máy chủ
   const CP = P + 'c:';
   const MKEY = P + 'meta';
+  const OKEY = P + 'outbox';
   const LEGACY_KEY = 'tmg_tms_db_v1' + SUF;
   const SESSION_KEY = 'tmg_tms_session' + SUF;
-  const IDB_NAME = 'tmg_tms' + SUF;
+  const LOCAL_IDB = 'tmg_tms' + SUF;
+  const IDB_NAME = CLOUD_ON ? 'tmg_tms_cloud' : LOCAL_IDB;
+  const BUCKET = 'tmg-files';
 
   const U = {
     uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); },
@@ -53,11 +60,11 @@
   };
 
   /* ---------------- IndexedDB (ảnh + bản sao lưu) ---------------- */
-  let idbP = null;
-  function idb() {
-    if (!idbP) idbP = new Promise((res, rej) => {
+  const idbs = {};
+  function idb(name = IDB_NAME) {
+    if (!idbs[name]) idbs[name] = new Promise((res, rej) => {
       if (!global.indexedDB) return rej(new Error('Trình duyệt không hỗ trợ IndexedDB'));
-      let r; try { r = indexedDB.open(IDB_NAME, 1); } catch (e) { return rej(e); }
+      let r; try { r = indexedDB.open(name, 1); } catch (e) { return rej(e); }
       r.onupgradeneeded = () => {
         const d = r.result;
         if (!d.objectStoreNames.contains('files')) d.createObjectStore('files');
@@ -67,10 +74,10 @@
       r.onerror = () => rej(r.error);
       r.onblocked = () => rej(new Error('IndexedDB bị chặn'));
     });
-    return idbP;
+    return idbs[name];
   }
-  function tx(store, mode, fn) {
-    return idb().then(d => new Promise((res, rej) => {
+  function tx(store, mode, fn, dbName) {
+    return idb(dbName).then(d => new Promise((res, rej) => {
       const t = d.transaction(store, mode); const s = t.objectStore(store); let out;
       const r = fn(s); if (r) r.onsuccess = () => { out = r.result; };
       t.oncomplete = () => res(out); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error || new Error('abort'));
@@ -86,14 +93,20 @@
       if (legacy) return dataUrl; // không có IndexedDB: giữ ảnh trong bản ghi như cũ
       const ref = 'idb:' + U.uid();
       await tx('files', 'readwrite', s => s.put(dataUrl, ref));
-      fileCache.set(ref, dataUrl); return ref;
+      fileCache.set(ref, dataUrl);
+      if (CLOUD_ON) enqueue([{ k: 'f|' + ref, t: 'file', ref }]);
+      return ref;
     },
-    async putAs(ref, dataUrl) { await tx('files', 'readwrite', s => s.put(dataUrl, ref)); fileCache.set(ref, dataUrl); },
-    async get(ref) {
+    async putAs(ref, dataUrl, dbName) { await tx('files', 'readwrite', s => s.put(dataUrl, ref), dbName); if (!dbName) fileCache.set(ref, dataUrl); },
+    async get(ref, dbName) {
       if (!ref) return '';
       if (!Files.isRef(ref)) return ref;
-      if (fileCache.has(ref)) return fileCache.get(ref);
-      try { const v = await tx('files', 'readonly', s => s.get(ref)); if (v) fileCache.set(ref, v); return v || ''; } catch (e) { return ''; }
+      if (!dbName && fileCache.has(ref)) return fileCache.get(ref);
+      let v = '';
+      try { v = await tx('files', 'readonly', s => s.get(ref), dbName) || ''; } catch (e) { v = ''; }
+      if (!v && CLOUD_ON && !dbName) v = await Cloud.download(ref); // máy khác chụp: tải từ máy chủ
+      if (v && !dbName) fileCache.set(ref, v);
+      return v;
     }
   };
   // Tự nạp ảnh cho mọi <img data-file="idb:...">
@@ -128,8 +141,9 @@
     writeJSON(LEGACY_KEY, blob);
   }
   // Ghi theo bản ghi: gộp với bản đang lưu (có thể do tab khác vừa ghi)
-  function persist(c, changed, purged) {
+  function persist(c, changed, purged, opts) {
     if (legacy) { const list = col(c); changed.forEach(r => { if (!list.includes(r)) list.unshift(r); }); if (purged) mem.cols[c] = list.filter(r => !purged.includes(r.id)); bump(c); return saveLegacy(); }
+    if (CLOUD_ON && !(opts && opts.remote)) enqueue(changed.map(r => ({ k: 'r|' + c + '|' + r.id, t: 'up', col: c, id: r.id, data: r })).concat((purged || []).map(id => ({ k: 'r|' + c + '|' + id, t: 'del', col: c, id }))));
     const stored = readJSON(CP + c, []);
     const idx = new Map(stored.map((r, i) => [r.id, i]));
     const fresh = [];
@@ -143,6 +157,196 @@
   function saveMeta(mut) {
     if (legacy) { mut(mem.meta); return saveLegacy(); }
     const m = readJSON(MKEY, mem.meta); mut(m); writeJSON(MKEY, m); mem.meta = m;
+  }
+
+  /* ---------------- Máy chủ Supabase: hàng đợi gửi + đồng bộ ---------------- */
+  // Mọi thay đổi ghi ngay vào máy (dùng được khi mất mạng), rồi xếp hàng gửi lên máy chủ
+  function enqueue(ops) {
+    if (!ops.length) return;
+    const ob = readJSON(OKEY, []);
+    ops.forEach(op => { op.ts = U.stamp() + Math.random().toString(36).slice(2, 5); const i = ob.findIndex(x => x.k === op.k); if (i >= 0) ob.splice(i, 1); ob.push(op); });
+    writeJSON(OKEY, ob); Cloud.emit();
+    clearTimeout(Cloud._ft); Cloud._ft = setTimeout(() => Cloud.flush(), 300);
+  }
+  const dequeue = sent => { const keep = readJSON(OKEY, []).filter(o => !sent.some(s => s.k === o.k && s.ts === o.ts)); writeJSON(OKEY, keep); };
+  const isNetErr = e => !e || /fetch|network|Failed to|timeout|load failed/i.test(String(e.message || e)) || e.code === '' ;
+  // Ghi dữ liệu nhận từ máy chủ vào bản sao trên máy (không xếp hàng gửi lại)
+  function applyRemote(rows, deletes) {
+    const pend = new Set(readJSON(OKEY, []).map(o => o.k));
+    const byCol = {};
+    rows.forEach(r => { if (!pend.has('r|' + r.col + '|' + r.id)) (byCol[r.col] = byCol[r.col] || { up: [], del: [] }).up.push(Object.assign({}, r.data, { id: r.id })); });
+    (deletes || []).forEach(d => { if (!pend.has('r|' + d.col + '|' + d.id)) (byCol[d.col] = byCol[d.col] || { up: [], del: [] }).del.push(d.id); });
+    Object.entries(byCol).forEach(([c, x]) => persist(c, x.up, x.del, { remote: true }));
+    return Object.keys(byCol).length > 0;
+  }
+  const dataUrlToBlob = d => fetch(d).then(r => r.blob());
+  const blobToDataUrl = b => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(b); });
+  const CODE_COLS = () => { const s = new Set(['revenue', 'cost_request', 'route_fuel', 'incident', 'document', 'route', 'order']); Object.values(global.TMG_MODULES || {}).forEach(m => m.fields.some(f => f.type === 'code') && s.add(m.key)); return [...s]; };
+
+  const Cloud = {
+    on: CLOUD_ON, client: null, user: null, profile: null, error: '', realtime: '', lastSync: '', syncing: false, listeners: [],
+    emit() { Cloud.listeners.forEach(f => { try { f(Cloud.state()); } catch (e) { } }); },
+    onStatus(f) { Cloud.listeners.push(f); },
+    onError: null,
+    state() { return { on: CLOUD_ON, user: Cloud.user && Cloud.user.email, role: Cloud.profile && Cloud.profile.role, pending: readJSON(OKEY, []).length, failed: (mem && mem.meta.failed || []).length, online: global.navigator ? navigator.onLine : true, realtime: Cloud.realtime, lastSync: Cloud.lastSync, syncing: Cloud.syncing, error: Cloud.error }; },
+    failedList() { return (mem && mem.meta.failed) || []; },
+    driverEmail(phone) { return 'tx' + String(phone || '').replace(/\D/g, '') + '@taixe.tmgtms.vn'; },
+    async rpc(fn, args) { const { data, error } = await Cloud.client.rpc(fn, args || {}); if (error) throw new Error(error.message); return data; },
+    async status() { return Cloud.rpc('tmg_status'); },
+    async signIn(email, password) {
+      if (!Cloud.client) throw new Error(Cloud.error || 'Chưa kết nối được máy chủ');
+      const { data, error } = await Cloud.client.auth.signInWithPassword({ email: String(email).trim().toLowerCase(), password });
+      if (error) throw new Error(/invalid/i.test(error.message) ? 'Sai tài khoản hoặc mật khẩu' : error.message);
+      await Cloud.afterLogin(data.user, false);
+    },
+    signOut() { try { Object.keys(localStorage).filter(k => k.startsWith('tmg_tms_auth')).forEach(k => localStorage.removeItem(k)); } catch (e) { } if (Cloud.client) Cloud.client.auth.signOut().catch(() => { }); Cloud.user = Cloud.profile = null; Cloud.emit(); },
+    async afterLogin(user, background) {
+      const st = await Cloud.status();
+      if (!st || !st.role) { Cloud.signOut(); throw new Error('Tài khoản chưa được cấp quyền sử dụng hệ thống'); }
+      const prev = readJSON(MKEY, {});
+      if (prev.owner && prev.owner !== user.id) { // máy dùng chung: xoá bản sao của người trước
+        colKeys().forEach(c => localStorage.removeItem(CP + c)); localStorage.removeItem(OKEY);
+        mem = { meta: { __v: SCHEMA_VERSION, __seq: {}, settings: {} }, cols: {} }; writeJSON(MKEY, mem.meta); Object.keys(views).forEach(bump);
+      }
+      saveMeta(m => { m.owner = user.id; m.profile = st; });
+      Cloud.user = user; Cloud.profile = st; Cloud.error = '';
+      Cloud.subscribe();
+      const first = !mem.meta.lastPull;
+      const p = Cloud.sync().then(() => Cloud.reserve(CODE_COLS(), true)).catch(e => { Cloud.error = e.message; Cloud.emit(); });
+      if (first || !background) await p;
+      Cloud.emit();
+    },
+    async sync() {
+      if (!Cloud.user || Cloud.syncing) return;
+      Cloud.syncing = true; Cloud.emit();
+      try { await Cloud.flush(); await Cloud.pull(); Cloud.lastSync = U.stamp(); Cloud.error = ''; }
+      catch (e) { Cloud.error = isNetErr(e) ? 'Mất kết nối máy chủ — dữ liệu được lưu tạm trên máy' : e.message; }
+      finally { Cloud.syncing = false; Cloud.emit(); }
+    },
+    async pull() {
+      const last = mem.meta.lastPull || '1970-01-01T00:00:00+00:00'; let off = 0, max = last, changed = false;
+      for (;;) {
+        const { data, error } = await Cloud.client.from('tmg_records').select('col,id,data,updated_at').gt('updated_at', last).order('updated_at').order('col').order('id').range(off, off + 999);
+        if (error) throw new Error(error.message);
+        if (applyRemote(data)) changed = true;
+        data.forEach(r => { if (r.updated_at > max) max = r.updated_at; });
+        off += data.length; if (data.length < 1000) break;
+      }
+      saveMeta(m => { m.lastPull = max; });
+      if (changed && Store.onChange) Store.onChange('cloud');
+    },
+    subscribe() {
+      if (Cloud._ch || !Cloud.client) return;
+      Cloud._ch = Cloud.client.channel('tmg-records').on('postgres_changes', { event: '*', schema: 'public', table: 'tmg_records' }, p => {
+        const ch = p.eventType === 'DELETE' ? applyRemote([], [p.old]) : applyRemote([p.new]);
+        if (ch && Store.onChange) Store.onChange('cloud');
+      }).subscribe(s => { Cloud.realtime = s; Cloud.emit(); });
+    },
+    async flush() {
+      if (!Cloud.client || !Cloud.user || Cloud._flushing) return;
+      Cloud._flushing = true;
+      try {
+        let ob = readJSON(OKEY, []);
+        // ảnh trước, để bản ghi tới máy khác là có ảnh
+        for (const op of ob.filter(o => o.t === 'file')) {
+          const d = await Files.get(op.ref); if (!d) { dequeue([op]); continue; }
+          const { error } = await Cloud.client.storage.from(BUCKET).upload(op.ref.slice(4) + '.jpg', await dataUrlToBlob(d), { upsert: true, contentType: 'image/jpeg' });
+          if (error && !/exists/i.test(error.message)) throw new Error(error.message);
+          dequeue([op]); Cloud.emit();
+        }
+        ob = readJSON(OKEY, []).filter(o => o.t !== 'file');
+        for (let i = 0; i < ob.length; i += 200) {
+          const batch = ob.slice(i, i + 200), ups = batch.filter(o => o.t === 'up'), dels = batch.filter(o => o.t === 'del');
+          if (ups.length) {
+            const { error } = await Cloud.client.from('tmg_records').upsert(ups.map(o => ({ col: o.col, id: o.id, data: o.data })), { onConflict: 'col,id', returning: 'minimal' });
+            if (error) { if (isNetErr(error)) throw error; for (const o of ups) await Cloud.sendOne(o); } else dequeue(ups);
+          }
+          for (const o of dels) { const { error } = await Cloud.client.from('tmg_records').delete().eq('col', o.col).eq('id', o.id); if (error && isNetErr(error)) throw error; dequeue([o]); }
+          Cloud.emit();
+        }
+      } finally { Cloud._flushing = false; Cloud.emit(); }
+    },
+    // Gửi từng bản ghi khi cả lô bị từ chối, để tách bản ghi lỗi (VD: không có quyền)
+    async sendOne(o) {
+      const { error } = await Cloud.client.from('tmg_records').upsert([{ col: o.col, id: o.id, data: o.data }], { onConflict: 'col,id', returning: 'minimal' });
+      if (error && isNetErr(error)) throw error;
+      dequeue([o]);
+      if (error) {
+        saveMeta(m => { m.failed = (m.failed || []).concat([{ at: U.stamp(), col: o.col, id: o.id, msg: error.message }]).slice(-50); m.lastPull = ''; }); // lấy lại bản đúng từ máy chủ
+        if (Cloud.onError) Cloud.onError('Máy chủ từ chối lưu ' + o.col + ': ' + error.message);
+      }
+    },
+    async download(ref) {
+      if (!Cloud.client || !Cloud.user) return '';
+      try {
+        const { data, error } = await Cloud.client.storage.from(BUCKET).download(ref.slice(4) + '.jpg');
+        if (error || !data) return '';
+        const d = await blobToDataUrl(data); await Files.putAs(ref, d); return d;
+      } catch (e) { return ''; }
+    },
+    async reserve(cols, onlyMissing) {
+      const need = cols.filter(c => { const b = (mem.meta.codes || {})[c]; return !onlyMissing || !b || b.end - b.next < 3; });
+      if (!need.length || !Cloud.user) return;
+      const res = await Cloud.rpc('tmg_reserve_many', { p_cols: need, p_n: 20 });
+      saveMeta(m => { m.codes = m.codes || {}; Object.entries(res).forEach(([c, start]) => { m.codes[c] = { next: Number(start), end: Number(start) + 19 }; }); });
+    },
+    users: {
+      list: () => Cloud.rpc('tmg_list_users'),
+      create: (email, password, name, role, driverId) => Cloud.rpc('tmg_create_user', { p_email: email, p_password: password, p_name: name, p_role: role, p_driver_id: driverId || null }),
+      setPassword: (userId, password) => Cloud.rpc('tmg_set_password', { p_user: userId, p_password: password }),
+      remove: userId => Cloud.rpc('tmg_delete_user', { p_user: userId })
+    },
+    bootstrapAdmin: (email, password, name) => Cloud.rpc('tmg_bootstrap_admin', { p_email: email, p_password: password, p_name: name }),
+    // Dữ liệu đang có trên trình duyệt này (bản chạy trên máy, v2 hoặc v1)
+    localSource() {
+      const meta = readJSON(LOCAL_P + 'meta', null); const blob = { __seq: {}, settings: {} };
+      if (meta) { blob.__seq = meta.__seq || {}; blob.settings = meta.settings || {}; for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith(LOCAL_P + 'c:')) blob[k.slice(LOCAL_P.length + 2)] = readJSON(k, []); } }
+      else { const old = readJSON(LEGACY_KEY, null); if (!old) return null; Object.assign(blob, old); }
+      const counts = {}; let total = 0; Object.entries(blob).forEach(([k, v]) => { if (isCol(k, v) && k !== 'activity_log') { counts[k] = v.length; total += v.length; } });
+      return { blob, counts, total };
+    },
+    async uploadLocal(progress) {
+      const src = Cloud.localSource(); if (!src) throw new Error('Trình duyệt này không có dữ liệu chạy trên máy');
+      const { blob } = src; let n = 0;
+      for (const [c, list] of Object.entries(blob)) {
+        if (!isCol(c, list) || c === 'activity_log') continue;
+        for (const r of list) {
+          if (c === 'admin') delete r.password; // không đưa mật khẩu dạng chữ lên máy chủ
+          if (c === 'driver') delete r.pin;
+          for (const [f, v] of Object.entries(r)) {
+            if (Files.isRef(v)) { const d = await Files.get(v, LOCAL_IDB); if (d) { await Files.putAs(v, d); enqueue([{ k: 'f|' + v, t: 'file', ref: v }]); } }
+            else if (Files.isData(v)) r[f] = await Files.put(v);
+          }
+        }
+        persist(c, list); n += list.length; progress && progress(n);
+      }
+      if (blob.settings && Object.keys(blob.settings).length) persist('_settings', [Object.assign({}, Store.settings(), blob.settings, { id: 'main' })]);
+      await Cloud.rpc('tmg_seq_floor', { p_vals: blob.__seq || {} });
+      saveMeta(m => { m.codes = {}; });
+      await Cloud.flush(); await Cloud.reserve(CODE_COLS());
+      return n;
+    }
+  };
+
+  async function bootCloud() {
+    try { await idb(); } catch (e) { console.warn('Không có IndexedDB — ảnh chỉ xem được khi có mạng'); }
+    mem = { meta: readJSON(MKEY, null) || { __v: SCHEMA_VERSION, __seq: {}, settings: {} }, cols: {} };
+    if (!readJSON(MKEY, null)) writeJSON(MKEY, mem.meta);
+    if (!global.supabase || !global.supabase.createClient) { Cloud.error = 'Không tải được thư viện kết nối máy chủ (kiểm tra mạng)'; return; }
+    Cloud.client = global.supabase.createClient(CLOUD_CFG.url, CLOUD_CFG.anonKey, { auth: { persistSession: true, autoRefreshToken: true, storageKey: 'tmg_tms_auth' } });
+    global.addEventListener('online', () => Cloud.sync());
+    global.addEventListener('offline', () => Cloud.emit());
+    setInterval(() => { if (Cloud.user) Cloud.sync(); }, 60000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && Cloud.user) Cloud.sync(); });
+    try {
+      const { data } = await Cloud.client.auth.getSession();
+      if (data && data.session) await Cloud.afterLogin(data.session.user, true);
+    } catch (e) {
+      // Không có mạng: vẫn mở bằng dữ liệu đã lưu trên máy nếu đã đăng nhập trước đó
+      Cloud.error = e.message;
+      if (isNetErr(e) && mem.meta.owner && mem.meta.profile) { Cloud.user = { id: mem.meta.owner, email: mem.meta.profile.email }; Cloud.profile = mem.meta.profile; }
+    }
+    if (Cloud.profile) saveMeta(m => { m.profile = Cloud.profile; });
   }
 
   /* ---------------- Chuyển đổi / ghi toàn bộ ---------------- */
@@ -207,6 +411,7 @@
   /* ---------------- Khởi động ---------------- */
   let readyP = null;
   async function boot() {
+    if (CLOUD_ON) return bootCloud();
     let hasIDB = true; try { await idb(); } catch (e) { hasIDB = false; }
     const m = readJSON(MKEY, null);
     const old = localStorage.getItem(LEGACY_KEY);
@@ -240,6 +445,11 @@
     cols() { ensure(); return legacy ? Object.keys(mem.cols) : colKeys(); },
     nextCode(c, prefix) {
       let n;
+      if (CLOUD_ON) { // lấy số từ dải đã giữ chỗ trên máy chủ => không trùng giữa các máy
+        saveMeta(m => { const b = (m.codes || {})[c]; if (b && b.next <= b.end) { n = b.next; b.next++; } });
+        Cloud.reserve([c], true).catch(() => { });
+        return n != null ? prefix + U.pad(n) : prefix + '-' + Date.now().toString(36).toUpperCase().slice(-6); // mất mạng: mã tạm không trùng
+      }
       saveMeta(m => { m.__seq = m.__seq || {}; const base = m.__seq[c] != null ? m.__seq[c] : col(c).length; n = base + 1; m.__seq[c] = n; });
       return prefix + U.pad(n);
     },
@@ -271,8 +481,8 @@
       Store.cols().forEach(c => { if (c !== 'activity_log') col(c).forEach(r => { if (r._deleted) out.push({ col: c, rec: r }); }); });
       return out.sort((a, b) => String(b.rec._deleted).localeCompare(String(a.rec._deleted)));
     },
-    settings() { ensure(); return (mem.meta.settings = mem.meta.settings || {}); },
-    saveSettings(s) { saveMeta(m => { m.settings = Object.assign(m.settings || {}, s); }); },
+    settings() { ensure(); if (CLOUD_ON) { const r = Store.get('_settings', 'main'); return r ? Object.assign({}, r) : {}; } return (mem.meta.settings = mem.meta.settings || {}); },
+    saveSettings(s) { if (CLOUD_ON) { persist('_settings', [Object.assign({}, Store.settings(), s, { id: 'main' })]); return; } saveMeta(m => { m.settings = Object.assign(m.settings || {}, s); }); },
     // Sao lưu ra file: gồm cả ảnh
     async exportJSON() {
       const blob = currentBlob(); const files = {};
@@ -285,17 +495,26 @@
       if (!blob || typeof blob !== 'object' || !Object.entries(blob).some(([k, v]) => isCol(k, v))) throw new Error('File sao lưu không hợp lệ');
       if (legacy) throw new Error('Trình duyệt này không hỗ trợ khôi phục (thiếu IndexedDB)');
       await Backups.snapshot(reason);
-      if (blob.__files) { for (const [ref, d] of Object.entries(blob.__files)) await Files.putAs(ref, d); delete blob.__files; }
-      writeBlob(await migrateBlob(blob));
+      if (blob.__files) { for (const [ref, d] of Object.entries(blob.__files)) { await Files.putAs(ref, d); if (CLOUD_ON) enqueue([{ k: 'f|' + ref, t: 'file', ref }]); } delete blob.__files; }
+      await migrateBlob(blob);
+      if (CLOUD_ON) { // máy chủ: gộp theo mã bản ghi rồi gửi lên (không xoá bản ghi khác trên máy chủ)
+        Object.entries(blob).forEach(([c, list]) => { if (isCol(c, list) && c !== 'activity_log') persist(c, list.map(r => { const x = Object.assign({}, r); delete x.password; return x; })); });
+        await Cloud.flush(); return;
+      }
+      writeBlob(blob);
     },
     async restoreBackup(id) { const b = await Backups.get(id); if (!b) throw new Error('Không tìm thấy bản sao lưu'); await Store.importJSON(b.data, 'Tự động trước khi khôi phục bản ' + b.at); },
-    async reset() { await Backups.snapshot('Tự động trước khi khởi tạo lại dữ liệu mẫu'); writeBlob(await migrateBlob(global.TMG_SEED())); },
-    async wipe(keep) { await Backups.snapshot('Tự động trước khi xoá sạch dữ liệu'); const b = currentBlob(); Object.keys(b).forEach(k => { if (isCol(k, b[k]) && !keep.includes(k)) delete b[k]; }); b.__seq = {}; writeBlob(b); },
+    async reset() { if (CLOUD_ON) throw new Error('Không dùng được khi chạy trên máy chủ'); await Backups.snapshot('Tự động trước khi khởi tạo lại dữ liệu mẫu'); writeBlob(await migrateBlob(global.TMG_SEED())); },
+    async wipe(keep) { if (CLOUD_ON) throw new Error('Không dùng được khi chạy trên máy chủ'); await Backups.snapshot('Tự động trước khi xoá sạch dữ liệu'); const b = currentBlob(); Object.keys(b).forEach(k => { if (isCol(k, b[k]) && !keep.includes(k)) delete b[k]; }); b.__seq = {}; writeBlob(b); },
     usage() { let n = 0; for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && (k.startsWith(P) || k === LEGACY_KEY)) n += (localStorage.getItem(k) || '').length; } return n; },
     // Phiên đăng nhập quản trị
-    session() { try { return JSON.parse(sessionStorage.getItem(SESSION_KEY) || localStorage.getItem(SESSION_KEY)); } catch (e) { return null; } },
+    session() {
+      if (CLOUD_ON) { const p = Cloud.profile; return p && Cloud.user ? { id: Cloud.user.id, name: p.name || Cloud.user.email, username: p.email || Cloud.user.email, role: p.role, driver_id: p.driver_id } : null; }
+      try { return JSON.parse(sessionStorage.getItem(SESSION_KEY) || localStorage.getItem(SESSION_KEY)); } catch (e) { return null; }
+    },
     setSession(s, remember) { const t = JSON.stringify(s); sessionStorage.setItem(SESSION_KEY, t); if (remember) localStorage.setItem(SESSION_KEY, t); },
-    clearSession() { sessionStorage.removeItem(SESSION_KEY); localStorage.removeItem(SESSION_KEY); },
+    clearSession() { sessionStorage.removeItem(SESSION_KEY); localStorage.removeItem(SESSION_KEY); if (CLOUD_ON) Cloud.signOut(); },
+    cloud: Cloud,
     actor: null, // App tài xế đặt tên tài xế ở đây để nhật ký ghi đúng người
     userName() { if (Store.actor) return Store.actor; const s = Store.session(); return s ? s.name : 'Hệ thống'; },
     label(c, id, field) { const r = id && Store.get(c, id); if (!r) return ''; return r[field || 'name'] || r.plate || r.code || ''; },

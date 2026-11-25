@@ -1,7 +1,16 @@
 /* TMG TMS - giao diện quản trị (v2: giao diện hiện đại) */
 (function () {
   'use strict';
-  const M = window.TMG_MODULES, MENU = window.TMG_MENU;
+  const M = window.TMG_MODULES;
+  const CLOUD = Store.cloud.on;
+  // Chạy trên máy chủ: tài khoản đăng nhập do Supabase quản lý -> thay mục "Người dùng", thêm trang "Máy chủ dữ liệu",
+  // và không hiển thị mật khẩu/PIN dạng chữ trong dữ liệu
+  const MENU = window.TMG_MENU.map(g => !g.items ? g : Object.assign({}, g, {
+    items: g.items.map(it => CLOUD && it === 'admin' ? { id: 'accounts', title: 'Tài khoản đăng nhập', page: 'accounts' } : it)
+      .concat(g.title === 'Thiết lập' ? [{ id: 'cloud', title: CLOUD ? 'Máy chủ dữ liệu' : 'Máy chủ dữ liệu (chưa bật)', page: 'cloud' }] : [])
+  }));
+  if (CLOUD) { M.driver.fields = M.driver.fields.filter(f => f.k !== 'pin'); M.admin.fields = M.admin.fields.filter(f => f.k !== 'password'); }
+  const ROLE_LABEL = { admin: 'Quản trị viên', accountant: 'Kế toán (được duyệt chi)', dispatcher: 'Điều vận', driver: 'Tài xế' };
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
   const esc = U.esc;
@@ -37,7 +46,7 @@
   function toast(msg) { const box = $('#toast'); const d = document.createElement('div'); d.innerHTML = ic('check') + esc(msg); box.appendChild(d); setTimeout(() => d.remove(), 2600); }
   const session = () => Store.session();
   // Phải có vai trò được cấp quyền duyệt
-  const canApprove = () => { const s = session(); if (!s) return false; const u = Store.get('admin', s.id); const r = u && Store.get('role', u.role_id); return !!r && r.approve_cost === 'Có'; };
+  const canApprove = () => { const s = session(); if (!s) return false; if (CLOUD) return ['admin', 'accountant'].includes(s.role); const u = Store.get('admin', s.id); const r = u && Store.get('role', u.role_id); return !!r && r.approve_cost === 'Có'; };
   const BADGE = {
     ok: ['Hoàn thành', 'Đã xác nhận', 'Đã duyệt', 'Đã chi', 'Đã thanh toán', 'Đã phê duyệt', 'Có', 'Đã thu tiền', 'Đã xử lý', 'Xe trống', 'Hoạt động', 'Đã tạo đơn'],
     warn: ['Chờ duyệt', 'Chờ xác nhận', 'Chờ tài xế xác nhận', 'Chờ nhận hàng', 'Chưa phê duyệt', 'Thanh toán chưa đủ', 'Đang xử lý', 'Chưa thanh toán', 'Gửi tài xế', 'Mới', 'Chưa xử lý', 'Chưa bắt đầu', 'Khởi tạo', 'Tạo mới'],
@@ -111,7 +120,58 @@
   }
 
   /* ---------- Login ---------- */
+  const loginShell = (inner) => {
+    const set = Store.settings();
+    $('#app').innerHTML = `
+    <div class="login">
+      <div class="login-hero">
+        <div class="brand-mark"><span class="logo" style="background:#fff;color:var(--brand)">${ic('truck')}</span><span>TMG TMS</span></div>
+        <div><h2>Quản lý vận tải<br>theo từng đầu xe</h2><p>${esc(set.company || 'TMG Logistics')}</p>
+          <ul><li><span>${ic('truck')}</span>Đơn hàng, chuyến xe, điều vận</li><li><span>${ic('receipt')}</span>Doanh thu, đề nghị &amp; duyệt chi phí</li><li><span>${ic('chart')}</span>Lãi lỗ theo đầu xe, theo tháng</li><li><span>${ic('phone')}</span>App tài xế trên điện thoại</li></ul></div>
+        <a href="driver.html">${ic('phone')} Mở App tài xế →</a>
+      </div>
+      <div class="login-form">${inner}</div>
+    </div>`;
+  };
+  // Đăng nhập khi chạy trên máy chủ Supabase
+  async function renderCloudLogin() {
+    const C = Store.cloud;
+    const fail = (title, msg) => loginShell(`<div style="max-width:420px"><h1>${title}</h1><p class="muted">${msg}</p><p><a href="?local=1">Dùng tạm chế độ chạy trên máy →</a></p><button class="btn" onclick="location.reload()">${ic('refresh')} Thử lại</button></div>`);
+    if (!C.client) return fail('Không kết nối được máy chủ', esc(C.error));
+    loginShell('<div class="muted">Đang kết nối máy chủ…</div>');
+    let st;
+    try { st = await C.status(); }
+    catch (e) { return /tmg_status|function|schema cache|404/i.test(e.message) ? fail('Máy chủ chưa được cài đặt', 'Mở Supabase → SQL Editor, chạy file <code>supabase/setup.sql</code> rồi thử lại.') : fail('Không kết nối được máy chủ', esc(e.message)); }
+    if (!st.has_admin) {
+      loginShell(`<form id="bf"><h1>Tạo tài khoản quản trị</h1><p class="muted" style="margin:0 0 20px">Máy chủ mới chưa có quản trị viên. Tài khoản tạo ở đây có toàn quyền và dùng để cấp tài khoản cho nhân viên, tài xế.</p>
+        <div class="field"><label>Họ tên</label><input name="n" required></div><div class="field"><label>Email</label><input name="e" type="email" autocomplete="username" required></div>
+        <div class="field"><label>Mật khẩu (tối thiểu 8 ký tự)</label><input name="p" type="password" minlength="8" autocomplete="new-password" required></div><div class="field"><label>Nhập lại mật khẩu</label><input name="p2" type="password" autocomplete="new-password" required></div>
+        <div class="err" id="lerr"></div><button class="btn primary block">Tạo và đăng nhập</button></form>`);
+      $('#bf').onsubmit = async e => {
+        e.preventDefault(); const f = new FormData(e.target); const err = $('#lerr');
+        if (f.get('p') !== f.get('p2')) return (err.textContent = 'Hai mật khẩu không khớp');
+        const b = e.target.querySelector('button'); b.disabled = true;
+        try { await C.bootstrapAdmin(f.get('e'), f.get('p'), f.get('n')); await C.signIn(f.get('e'), f.get('p')); route(); }
+        catch (x) { err.textContent = x.message; b.disabled = false; }
+      };
+      return;
+    }
+    loginShell(`<form id="lf"><h1>Đăng nhập</h1><p class="muted" style="margin:0 0 24px">Trang quản trị dành cho văn phòng</p>
+      <div class="field"><label for="lu">Email</label><input id="lu" name="u" type="email" autocomplete="username" required autofocus></div>
+      <div class="field"><label for="lp">Mật khẩu</label><input id="lp" name="p" type="password" autocomplete="current-password" required></div>
+      <div class="err" id="lerr"></div><button class="btn primary block">Đăng nhập</button>
+      <div class="hint">Dữ liệu dùng chung trên máy chủ. Quên mật khẩu: nhờ quản trị viên đặt lại trong mục Tài khoản đăng nhập.</div></form>`);
+    $('#lf').onsubmit = async e => {
+      e.preventDefault(); const f = new FormData(e.target); const b = e.target.querySelector('button'); b.disabled = true;
+      try {
+        await C.signIn(f.get('u'), f.get('p'));
+        if (session().role === 'driver') { C.signOut(); throw new Error('Đây là tài khoản tài xế — hãy dùng App tài xế (driver.html)'); }
+        route();
+      } catch (x) { $('#lerr').textContent = x.message; b.disabled = false; }
+    };
+  }
   function renderLogin() {
+    if (CLOUD) return renderCloudLogin();
     const set = Store.settings();
     $('#app').innerHTML = `
     <div class="login">
@@ -160,6 +220,7 @@
           <button class="btn ghost icon menu-btn" id="mt" aria-label="Menu">${ic('menu')}</button>
           <div class="crumbs"></div>
           <button class="top-search" id="ts">${ic('search')}<span class="t">Tìm xe, tài xế, đơn, mã phiếu…</span><span class="kbd">Ctrl K</span></button>
+          ${CLOUD ? '<a class="sync" id="sync" href="#/p/cloud" title="Trạng thái đồng bộ máy chủ"></a>' : ''}
           <button class="btn ghost icon" id="theme" title="Chế độ sáng/tối">${ic(document.documentElement.dataset.theme === 'dark' ? 'sun' : 'moon')}</button>
           <button class="btn ghost icon bell" id="bell" title="Thông báo">${ic('bell')}<span class="dot" id="bn" style="display:none"></span></button>
           <button class="avatar" id="av" title="${esc(s.name)}">${esc((s.name || 'A').trim()[0])}</button>
@@ -180,11 +241,18 @@
     $('#av').onclick = e => popover(e.currentTarget, `<div class="item" style="display:block"><b>${esc(s.name)}</b><br><small class="muted">${esc(s.username)}</small></div><div class="sep"></div>
       <a href="#/m/admin">${ic('users')} Người dùng</a><a href="#/p/settings">${ic('gear')} Thiết lập công ty</a><a href="#/p/backup">${ic('dl')} Sao lưu / Khôi phục</a><a href="#/p/trash">${ic('trash')} Thùng rác</a><div class="sep"></div><a id="lo">${ic('logout')} Đăng xuất</a>`,
       pop => { $('#lo', pop).onclick = () => { Store.clearSession(); location.hash = ''; location.reload(); }; });
+    if (CLOUD) { Store.cloud.onStatus(syncChip); syncChip(Store.cloud.state()); }
     $('#bell').onclick = e => { const n = notifications(); popover(e.currentTarget, n.length ? n.map(x => `<a href="${x.href}">${ic(x.icon)} <span>${x.text}</span></a>`).join('') : '<div class="item muted">Không có thông báo mới</div>'); };
   }
   document.addEventListener('keydown', e => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k' && session()) { e.preventDefault(); openPalette(); }
   });
+  function syncChip(st) {
+    const el = $('#sync'); if (!el) return;
+    const [k, t] = !st.online ? ['bad', `Mất mạng${st.pending ? ' · ' + st.pending + ' chờ gửi' : ''}`] : st.error ? ['bad', 'Lỗi đồng bộ'] : st.pending || st.syncing ? ['warn', st.pending ? `Đang gửi ${st.pending}` : 'Đang đồng bộ'] : ['ok', 'Đã đồng bộ'];
+    el.innerHTML = chip(t, k); el.title = st.error || 'Trạng thái đồng bộ máy chủ';
+  }
+  Store.cloud.onError = msg => toast(msg);
   function popover(anchor, html, after) {
     $$('.popover').forEach(p => p.remove());
     const p = document.createElement('div'); p.className = 'popover'; p.innerHTML = html; document.body.appendChild(p);
@@ -826,7 +894,8 @@
           <div class="card-b"><p class="muted" style="margin-top:0">Tự lưu 1 bản mỗi ngày (giữ 10 bản) và trước mọi thao tác ghi đè (khôi phục, khởi tạo lại, xoá sạch, nâng cấp dữ liệu).</p>
           <table class="grid"><thead><tr><th class="nosort">Thời điểm</th><th class="nosort">Lý do</th><th class="num nosort">Kích thước</th><th class="nosort"></th></tr></thead><tbody>
           ${list.map(b => `<tr><td>${U.date(b.at)}</td><td>${esc(b.reason)}</td><td class="num">${kb(b.size)}</td><td style="text-align:right"><button class="btn sm" data-dl="${b.id}">${ic('dl')} Tải</button> <button class="btn sm" data-rs="${b.id}">${ic('undo')} Khôi phục</button></td></tr>`).join('') || '<tr><td colspan="4"><div class="empty">Chưa có bản sao lưu</div></td></tr>'}</tbody></table></div></div>
-        <div class="card"><div class="card-h"><h3>Dữ liệu mẫu</h3></div><div class="card-b"><p class="muted" style="margin-top:0">Hai thao tác dưới <b>bắt buộc tải file sao lưu</b> về máy trước khi thực hiện.</p><button class="btn danger" id="rs">Khởi tạo lại dữ liệu mẫu</button> <button class="btn danger" id="clr">Xoá sạch, bắt đầu dữ liệu thật</button></div></div></div>`;
+        ${CLOUD ? '<div class="card"><div class="card-b muted">Đang chạy trên máy chủ: khôi phục từ file sẽ <b>gộp</b> dữ liệu trong file lên máy chủ (bản ghi cùng mã bị ghi đè), không xoá bản ghi khác. Các thao tác khởi tạo lại / xoá sạch bị tắt để bảo vệ dữ liệu dùng chung.</div></div>' : ''}
+        <div class="card" ${CLOUD ? 'hidden' : ''}><div class="card-h"><h3>Dữ liệu mẫu</h3></div><div class="card-b"><p class="muted" style="margin-top:0">Hai thao tác dưới <b>bắt buộc tải file sao lưu</b> về máy trước khi thực hiện.</p><button class="btn danger" id="rs">Khởi tạo lại dữ liệu mẫu</button> <button class="btn danger" id="clr">Xoá sạch, bắt đầu dữ liệu thật</button></div></div></div>`;
       const reload = () => setTimeout(() => location.reload(), 700);
       $('#ex', el).onclick = dlFile;
       $('#snap', el).onclick = async () => { await Store.Backups.snapshot('Thủ công'); toast('Đã tạo bản sao lưu'); PAGES.backup(el); };
@@ -847,6 +916,65 @@
       $$('[data-r]', el).forEach(a => a.onclick = () => { const [c, id] = a.dataset.r.split('|'); Store.restore(c, id); toast('Đã khôi phục'); PAGES.trash(el); refreshBell(); });
       $$('[data-p]', el).forEach(a => a.onclick = () => { const [c, id] = a.dataset.p.split('|'); if (confirm('Xoá vĩnh viễn bản ghi này? Không thể hoàn tác (trừ khi khôi phục từ bản sao lưu).')) { Store.purge(c, id); toast('Đã xoá vĩnh viễn'); PAGES.trash(el); } });
     }
+  };
+  /* ---------- Máy chủ dữ liệu & tài khoản (Supabase) ---------- */
+  PAGES.cloud = async (el) => {
+    const C = Store.cloud;
+    if (!CLOUD) {
+      el.innerHTML = head('Máy chủ dữ liệu', 'Đang chạy trên máy: dữ liệu chỉ nằm trên trình duyệt này.') + `<div class="card"><div class="card-b">Để văn phòng và điện thoại tài xế dùng chung dữ liệu: cấu hình <code>js/config.js</code> (địa chỉ + khoá anon Supabase), chạy <code>supabase/setup.sql</code>, rồi mở trang không kèm <code>?local=1</code>.</div></div>`;
+      return;
+    }
+    const st = C.state(); const failed = C.failedList();
+    const src = C.localSource(); const isAdmin = session().role === 'admin';
+    el.innerHTML = head('Máy chủ dữ liệu', 'Dữ liệu dùng chung giữa văn phòng và App tài xế. Mọi thay đổi được lưu ngay trên máy, rồi tự gửi lên máy chủ (kể cả khi vừa mất mạng).', `<button class="btn primary" id="sn">${ic('refresh')} Đồng bộ ngay</button>`) + `<div class="stack">
+      <div class="card"><div class="card-b"><div class="dl">
+        <div>Kết nối</div><div>${st.online ? chip('Có mạng', 'ok') : chip('Mất mạng', 'bad')} ${st.realtime === 'SUBSCRIBED' ? chip('Cập nhật tức thời', 'ok') : chip('Cập nhật định kỳ 60 giây', 'warn')}</div>
+        <div>Tài khoản</div><div>${esc(st.user || '')} · ${esc(ROLE_LABEL[st.role] || st.role || '')}</div>
+        <div>Chờ gửi lên máy chủ</div><div>${st.pending ? chip(st.pending + ' thay đổi', 'warn') : chip('Không có', 'ok')}</div>
+        <div>Đồng bộ lần cuối</div><div>${U.date(st.lastSync) || '—'}</div>
+        ${st.error ? `<div>Lỗi gần nhất</div><div style="color:var(--bad)">${esc(st.error)}</div>` : ''}
+      </div></div></div>
+      ${failed.length ? `<div class="card"><div class="card-h"><h3>Thay đổi bị máy chủ từ chối</h3></div><div class="card-b"><table class="grid"><thead><tr><th class="nosort">Lúc</th><th class="nosort">Module</th><th class="nosort">Lý do</th></tr></thead><tbody>${failed.slice().reverse().map(f => `<tr><td>${U.date(f.at)}</td><td>${esc(M[f.col] ? M[f.col].title : f.col)}</td><td style="white-space:normal">${esc(f.msg)}</td></tr>`).join('')}</tbody></table></div></div>` : ''}
+      ${isAdmin ? `<div class="card"><div class="card-h"><h3>Đưa dữ liệu từ trình duyệt này lên máy chủ</h3></div><div class="card-b">
+        ${src ? `<p class="muted" style="margin-top:0">Trình duyệt này có <b>${src.total.toLocaleString('vi-VN')}</b> bản ghi từ bản chạy trên máy (${Object.entries(src.counts).filter(([, n]) => n).slice(0, 8).map(([c, n]) => `${esc(M[c] ? M[c].title : c)}: ${n}`).join(', ')}…). Bản ghi cùng mã trên máy chủ sẽ bị ghi đè; mật khẩu và PIN dạng chữ <b>không</b> được gửi lên. Dữ liệu trên máy vẫn được giữ nguyên.</p>
+          <button class="btn" id="up">${ic('dl', 'style="transform:rotate(180deg)"')} Đưa ${src.total.toLocaleString('vi-VN')} bản ghi lên máy chủ</button> <span id="upst" class="muted"></span>` : '<p class="muted" style="margin:0">Trình duyệt này không có dữ liệu chạy trên máy.</p>'}
+      </div></div>` : ''}</div>`;
+    $('#sn', el).onclick = async () => { await C.sync(); toast(C.state().error || 'Đã đồng bộ'); PAGES.cloud(el); };
+    const up = $('#up', el);
+    if (up) up.onclick = async () => {
+      if (!confirm(`Đưa ${src.total} bản ghi từ trình duyệt này lên máy chủ dùng chung?`)) return;
+      up.disabled = true;
+      try { const n = await C.uploadLocal(k => { $('#upst', el).textContent = `Đã xử lý ${k.toLocaleString('vi-VN')}…`; }); toast(`Đã đưa ${n} bản ghi lên máy chủ`); PAGES.cloud(el); }
+      catch (e) { alert('Lỗi: ' + e.message); up.disabled = false; }
+    };
+  };
+  PAGES.accounts = async (el) => {
+    const C = Store.cloud;
+    if (!CLOUD) { location.hash = '#/m/admin'; return; }
+    if (session().role !== 'admin') { el.innerHTML = head('Tài khoản đăng nhập') + '<div class="card"><div class="card-b muted">Chỉ quản trị viên được quản lý tài khoản.</div></div>'; return; }
+    el.innerHTML = head('Tài khoản đăng nhập') + '<div class="muted">Đang tải…</div>';
+    let users; try { users = await C.users.list(); } catch (e) { el.innerHTML = head('Tài khoản đăng nhập') + `<div class="card"><div class="card-b" style="color:var(--bad)">${esc(e.message)}</div></div>`; return; }
+    const me = session().id; const drivers = Store.all('driver');
+    const redraw = () => PAGES.accounts(el);
+    const act = async (fn, ok) => { try { await fn(); toast(ok); redraw(); } catch (e) { alert('Lỗi: ' + e.message); } };
+    el.innerHTML = head('Tài khoản đăng nhập', 'Tài khoản do máy chủ quản lý. Mật khẩu được mã hoá, không ai xem được — chỉ đặt lại được.', `<button class="btn primary" id="nu">${ic('plus')} Thêm tài khoản văn phòng</button>`) + `<div class="stack">
+      <div class="card" style="overflow:auto"><div class="card-h"><h3>Văn phòng</h3></div><div class="card-b"><table class="grid"><thead><tr><th class="nosort">Họ tên</th><th class="nosort">Email</th><th class="nosort">Vai trò</th><th class="nosort">Đăng nhập gần nhất</th><th class="nosort"></th></tr></thead><tbody>
+        ${users.filter(u => u.role !== 'driver').map(u => `<tr><td class="code">${esc(u.name)}</td><td>${esc(u.email)}</td><td>${chip(ROLE_LABEL[u.role], u.role === 'admin' ? 'info' : '')}</td><td>${u.last_sign_in_at ? U.date(u.last_sign_in_at.slice(0, 16)) : '—'}</td><td style="text-align:right"><button class="btn sm" data-pw="${u.user_id}">Đặt lại mật khẩu</button> ${u.user_id === me ? '' : `<button class="btn sm danger" data-rm="${u.user_id}">Xoá</button>`}</td></tr>`).join('')}</tbody></table></div></div>
+      <div class="card" style="overflow:auto"><div class="card-h"><h3>Tài xế</h3><span class="grow"></span><span class="muted" style="font-size:13px">Tài xế đăng nhập App bằng số điện thoại + mã PIN</span></div><div class="card-b"><table class="grid"><thead><tr><th class="nosort">Tài xế</th><th class="nosort">Số điện thoại</th><th class="nosort">Xe phụ trách</th><th class="nosort">Tài khoản</th><th class="nosort"></th></tr></thead><tbody>
+        ${drivers.map(d => { const u = users.find(x => x.driver_id === d.id); return `<tr><td class="code">${esc(d.name)}</td><td>${esc(d.phone)}</td><td>${esc(Store.label('vehicle', d.vehicle_id))}</td><td>${u ? chip('Đã cấp', 'ok') + (u.last_sign_in_at ? ` <span class="muted">· ${U.date(u.last_sign_in_at.slice(0, 16))}</span>` : '') : chip('Chưa cấp', 'warn')}</td><td style="text-align:right">${u ? `<button class="btn sm" data-pin="${u.user_id}">Đặt lại PIN</button> <button class="btn sm danger" data-rm="${u.user_id}">Thu hồi</button>` : `<button class="btn sm primary" data-give="${d.id}" ${d.phone ? '' : 'disabled title="Chưa có số điện thoại"'}>Cấp tài khoản</button>`}</td></tr>`; }).join('') || '<tr><td colspan="5"><div class="empty">Chưa có tài xế</div></td></tr>'}</tbody></table></div></div></div>`;
+    const askPw = (title, label, min, pattern, done) => overlay(`<form class="modal sm" id="pf"><div class="m-h"><h3>${title}</h3><button type="button" class="btn ghost icon" data-close>${ic('x')}</button></div><div class="m-b"><div class="field"><label>${label}</label><input name="p" type="password" minlength="${min}" ${pattern ? `pattern="${pattern}" inputmode="numeric"` : ''} required autocomplete="new-password"></div></div><div class="m-f"><button type="button" class="btn" data-close>Huỷ</button><button class="btn primary">Lưu</button></div></form>`, (layer, close) => { $('#pf', layer).onsubmit = e => { e.preventDefault(); const v = new FormData(e.target).get('p'); close(); done(v); }; });
+    $$('[data-pw]', el).forEach(b => b.onclick = () => askPw('Đặt lại mật khẩu', 'Mật khẩu mới (tối thiểu 8 ký tự)', 8, '', v => act(() => C.users.setPassword(b.dataset.pw, v), 'Đã đặt lại mật khẩu')));
+    $$('[data-pin]', el).forEach(b => b.onclick = () => askPw('Đặt lại PIN tài xế', 'PIN mới (4–8 chữ số)', 4, '\\d{4,8}', v => act(() => C.users.setPassword(b.dataset.pin, v), 'Đã đặt lại PIN')));
+    $$('[data-rm]', el).forEach(b => b.onclick = () => { if (confirm('Xoá tài khoản này? Người dùng sẽ không đăng nhập được nữa (dữ liệu đã nhập vẫn giữ nguyên).')) act(() => C.users.remove(b.dataset.rm), 'Đã xoá tài khoản'); });
+    $$('[data-give]', el).forEach(b => b.onclick = () => { const d = Store.get('driver', b.dataset.give); askPw('Cấp tài khoản cho ' + esc(d.name), `PIN đăng nhập (4–8 chữ số) — tài xế đăng nhập bằng SĐT ${esc(d.phone)}`, 4, '\\d{4,8}', v => act(() => C.users.create(C.driverEmail(d.phone), v, d.name, 'driver', d.id), 'Đã cấp tài khoản cho ' + d.name)); });
+    $('#nu', el).onclick = () => overlay(`<form class="modal sm" id="uf"><div class="m-h"><h3>Thêm tài khoản văn phòng</h3><button type="button" class="btn ghost icon" data-close>${ic('x')}</button></div><div class="m-b">
+        <div class="field"><label>Họ tên</label><input name="n" required></div><div class="field"><label>Email đăng nhập</label><input name="e" type="email" required></div>
+        <div class="field"><label>Vai trò</label><select name="r">${['accountant', 'dispatcher', 'admin'].map(r => `<option value="${r}">${ROLE_LABEL[r]}</option>`).join('')}</select></div>
+        <div class="field"><label>Mật khẩu ban đầu (tối thiểu 8 ký tự)</label><input name="p" type="password" minlength="8" required autocomplete="new-password"></div>
+        <div class="hint">Điều vận: xem/sửa mọi dữ liệu nhưng không duyệt chi phí. Kế toán: được duyệt chi. Quản trị viên: toàn quyền, kể cả quản lý tài khoản.</div></div>
+        <div class="m-f"><button type="button" class="btn" data-close>Huỷ</button><button class="btn primary">Tạo tài khoản</button></div></form>`, (layer, close) => {
+      $('#uf', layer).onsubmit = e => { e.preventDefault(); const f = new FormData(e.target); close(); act(() => C.users.create(f.get('e'), f.get('p'), f.get('n'), f.get('r')), 'Đã tạo tài khoản ' + f.get('e')); };
+    });
   };
   PAGES.rpt_vehicle = PAGES.rptVehicle; PAGES.rpt_month = PAGES.rptMonth; PAGES.rpt_cat = PAGES.rptCat; PAGES.rpt_expiry = PAGES.rptExpiry;
 

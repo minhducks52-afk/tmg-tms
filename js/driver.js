@@ -41,7 +41,39 @@
   const ins = (col, rec) => Store.insert(col, Object.assign({ source: 'App' }, rec), me().name);
 
   /* ---------- Login ---------- */
+  const CLOUD = Store.cloud.on;
+  const hero = () => `<div class="hero"><div class="logo">${ic('truck')}</div><h1>TMG Driver</h1><p>App tài xế theo đầu xe${Store.settings().company ? ' · ' + esc(Store.settings().company) : ''}</p></div>`;
+  function chooseVehicle(driverId) {
+    const d = Store.get('driver', driverId);
+    const vehs = Store.all('vehicle').filter(v => v.active !== 'Không hoạt động');
+    const start = vid => { S = { driver_id: driverId, vehicle_id: vid, at: U.now() }; localStorage.setItem(SKEY, JSON.stringify(S)); render(); };
+    if (!d) { $('#le').textContent = 'Tài khoản chưa gắn với hồ sơ tài xế — liên hệ văn phòng'; return; }
+    if (!vehs.length) { $('#le').textContent = 'Bạn chưa được phân công xe — liên hệ điều vận'; return; }
+    if (vehs.length === 1) return start(vehs[0].id);
+    $('#app').innerHTML = `<div class="login">${hero()}<div class="panel"><div class="f"><label>Chào ${esc(d.name)}, chọn xe làm việc hôm nay</label></div>${vehs.map(v => `<button class="btn ghost" style="margin-bottom:8px" data-v="${v.id}">${ic('truck')} ${esc(v.plate)}</button>`).join('')}</div></div>`;
+    $$('[data-v]').forEach(b => b.onclick = () => start(b.dataset.v));
+  }
+  function cloudLogin() {
+    const C = Store.cloud;
+    $('#app').innerHTML = `<div class="login">${hero()}
+      <form class="panel" id="lf">
+        <div class="f"><label>Số điện thoại</label><input name="p" type="tel" inputmode="tel" required autocomplete="username"></div>
+        <div class="f"><label>Mã PIN</label><input name="pin" type="password" inputmode="numeric" required maxlength="8" autocomplete="current-password"></div>
+        <div class="err" id="le">${C.client ? '' : esc(C.error)}</div><button class="btn">Vào ca làm việc</button>
+        <div class="hint">Tài khoản và PIN do văn phòng cấp.<br>Dùng trên điện thoại: Chia sẻ → "Thêm vào màn hình chính".</div>
+      </form></div>`;
+    $('#lf').onsubmit = async e => {
+      e.preventDefault(); const f = new FormData(e.target); const b = e.target.querySelector('button'); b.disabled = true; $('#le').textContent = '';
+      try {
+        await C.signIn(C.driverEmail(f.get('p')), f.get('pin'));
+        const s = Store.session();
+        if (s.role !== 'driver') { C.signOut(); throw new Error('Đây là tài khoản văn phòng — hãy dùng trang quản trị'); }
+        chooseVehicle(s.driver_id);
+      } catch (x) { $('#le').textContent = /Sai tài khoản/.test(x.message) ? 'Sai số điện thoại hoặc mã PIN' : x.message; b.disabled = false; }
+    };
+  }
   function login() {
+    if (CLOUD) return cloudLogin();
     const vehs = Store.all('vehicle').filter(v => v.active !== 'Không hoạt động');
     $('#app').innerHTML = `<div class="login"><div class="hero"><div class="logo">${ic('truck')}</div><h1>TMG Driver</h1><p>App tài xế theo đầu xe · ${esc(Store.settings().company || '')}</p></div>
       <form class="panel" id="lf">
@@ -65,6 +97,7 @@
 
   /* ---------- Shell ---------- */
   function render() {
+    if (CLOUD && S && (!Store.session() || Store.session().driver_id !== S.driver_id)) S = null; // phiên máy chủ hết hạn / đổi người
     if (!S || !me() || !car()) { localStorage.removeItem(SKEY); S = null; Store.actor = null; return login(); }
     Store.actor = me().name; // nhật ký ghi đúng tên tài xế
     const ym = U.today().slice(0, 7); const [y, m] = ym.split('-').map(Number);
@@ -72,15 +105,23 @@
     const trips = Store.all('route').filter(r => r.vehicle_id === S.vehicle_id && U.month(r.pickup_date) === ym && r.status !== 'Hủy').length;
     const nUpd = tab === 'money' ? 0 : updates().length;
     $('#app').innerHTML = `<div class="wrap">
-      <div class="hdr"><div class="row"><span class="plate">${esc(car().plate)}</span><div class="who"><b>${esc(me().name)}</b><br><small>${esc(Store.label('vehicle_group', car().group_id))}</small></div><button class="out" id="lo" title="Kết thúc ca">${ic('logout')}</button></div></div>
+      <div class="hdr"><div class="row"><span class="plate">${esc(car().plate)}</span><div class="who"><b>${esc(me().name)}</b><small>${esc(Store.label('vehicle_group', car().group_id))}${CLOUD ? ' · <span id="dsync"></span>' : ''}</small></div><button class="out" id="lo" title="Kết thúc ca">${ic('logout')}</button></div></div>
       <div class="stats"><div class="stat"><div class="l">Doanh thu T${m}</div><div class="v">${short(fin.revenue)}</div></div><div class="stat"><div class="l">Chi phí T${m}</div><div class="v">${short(fin.cost)}</div></div><div class="stat"><div class="l">Chuyến T${m}</div><div class="v">${trips}</div></div></div>
       <div id="view"></div></div>
       <nav class="nav"><div class="in">${[['home', 'home', 'Trang chủ'], ['trips', 'route', 'Chuyến'], ['new', 'plus', ''], ['money', 'wallet', 'Thu chi'], ['me', 'user', 'Cá nhân']].map(([k, i, l]) => k === 'new' ? `<button class="fab" data-t="new"><span>${ic('plus')}</span></button>` : `<button data-t="${k}" class="${tab === k ? 'on' : ''}">${ic(i)}${l}${k === 'money' && nUpd ? `<span class="bd">${nUpd}</span>` : ''}</button>`).join('')}</div></nav>`;
-    $('#lo').onclick = () => { if (confirm('Kết thúc ca và đăng xuất?')) { localStorage.removeItem(SKEY); S = null; render(); } };
+    $('#lo').onclick = () => {
+      const pend = CLOUD ? Store.cloud.state().pending : 0;
+      if (!confirm(pend ? `Còn ${pend} thay đổi chưa gửi lên máy chủ (cần có mạng). Đăng xuất bây giờ có thể làm mất các thay đổi này. Vẫn kết thúc ca?` : 'Kết thúc ca và đăng xuất?')) return;
+      localStorage.removeItem(SKEY); S = null; if (CLOUD) Store.cloud.signOut(); render();
+    };
+    if (CLOUD) dsync(Store.cloud.state());
     $$('.nav button').forEach(b => b.onclick = () => { if (b.dataset.t === 'new') return newMenu(); tab = b.dataset.t; sub = null; render(); });
     if (tab === 'money') markSeen();
     VIEWS[tab]($('#view'));
   }
+
+  function dsync(st) { const el = $('#dsync'); if (el) el.textContent = !st.online ? `Mất mạng${st.pending ? ' · ' + st.pending + ' chờ gửi' : ''}` : st.pending ? `Đang gửi ${st.pending}…` : 'Đã đồng bộ'; }
+  if (CLOUD) { Store.cloud.onStatus(dsync); Store.cloud.onError = m => toast(m); }
 
   const QA = [
     ['cost', 'receipt', 'Đề nghị chi phí', '#eb6834'], ['fuel', 'fuel', 'Đổ nhiên liệu', '#1f5fae'],
@@ -163,7 +204,16 @@
       $$('[data-th]', el).forEach(b => b.onclick = () => { localStorage.setItem(THEME_KEY, b.dataset.th); applyTheme(); VIEWS.me(el); });
       $$('[data-sal]', el).forEach(b => b.onclick = () => { Store.update('salary', b.dataset.sal, { status: 'Đã xác nhận' }, d.name); toast('Đã xác nhận bảng lương'); render(); });
       $('#pin', el).onclick = () => sheet('Đổi mã PIN', `<form id="pf"><div class="f"><label>PIN hiện tại</label><input name="o" type="password" inputmode="numeric" required></div><div class="f"><label>PIN mới (4-8 số)</label><input name="n" type="password" inputmode="numeric" pattern="\\d{4,8}" required></div><button class="btn">Lưu</button></form>`, (root, close) => {
-        $('#pf', root).onsubmit = async e => { e.preventDefault(); const f = new FormData(e.target); if (f.get('o') !== String(d.pin)) return toast('PIN hiện tại không đúng'); Store.update('driver', d.id, { pin: f.get('n') }, d.name); close(); toast('Đã đổi PIN'); };
+        $('#pf', root).onsubmit = async e => {
+          e.preventDefault(); const f = new FormData(e.target);
+          if (CLOUD) { // PIN là mật khẩu tài khoản trên máy chủ (được mã hoá)
+            const C = Store.cloud;
+            try { await C.signIn(C.driverEmail(d.phone), f.get('o')); } catch (x) { return toast(/Sai tài khoản/.test(x.message) ? 'PIN hiện tại không đúng' : x.message); }
+            try { await C.users.setPassword(Store.session().id, f.get('n')); close(); toast('Đã đổi PIN'); } catch (x) { toast(x.message); }
+            return;
+          }
+          if (f.get('o') !== String(d.pin)) return toast('PIN hiện tại không đúng'); Store.update('driver', d.id, { pin: f.get('n') }, d.name); close(); toast('Đã đổi PIN');
+        };
       });
     }
   };

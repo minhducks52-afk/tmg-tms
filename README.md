@@ -49,7 +49,21 @@ Không cần cài đặt, không cần máy chủ: HTML/CSS/JavaScript thuần, 
 - **Sao lưu tự động** mỗi ngày (giữ 10 bản) và trước mọi thao tác ghi đè; file sao lưu tải về gồm cả ảnh
 - Dữ liệu định dạng cũ (v1) được **tự nâng cấp** lần đầu mở bản mới, sau khi đã sao lưu nguyên bản cũ
 
-**Giới hạn hiện tại:** dữ liệu vẫn nằm trên từng trình duyệt, nên điện thoại tài xế và máy văn phòng chưa dùng chung dữ liệu; đăng nhập chỉ kiểm tra phía trình duyệt. Giai đoạn tiếp theo sẽ nối **Supabase** (cơ sở dữ liệu dùng chung, đăng nhập thật). Lớp dữ liệu nằm gọn trong `js/store.js`.
+## Máy chủ dữ liệu dùng chung (Supabase)
+Khi `js/config.js` có địa chỉ + khoá **anon** của Supabase, ứng dụng chạy ở chế độ máy chủ:
+- Văn phòng và App tài xế **dùng chung dữ liệu**, cập nhật tức thời giữa các máy
+- **Đăng nhập thật** (mật khẩu được mã hoá trên máy chủ): văn phòng đăng nhập bằng email; tài xế bằng **SĐT + PIN**
+- **Phân quyền trên máy chủ**: tài xế chỉ thấy dữ liệu xe mình; chỉ Quản trị viên / Kế toán được duyệt chi; tài xế không tự xác nhận doanh thu hay phê duyệt chuyến
+- Mất mạng vẫn nhập được: thay đổi lưu trên máy, tự gửi khi có mạng lại
+- Mã chứng từ cấp từ máy chủ nên không trùng giữa các máy
+
+Cài đặt (1 lần):
+1. Supabase → **SQL Editor** → dán toàn bộ `supabase/setup.sql` → **Run**
+2. Mở trang quản trị → tạo **tài khoản quản trị đầu tiên**
+3. *Thiết lập → Máy chủ dữ liệu* → **Đưa dữ liệu từ trình duyệt này lên máy chủ** (nếu đã nhập dữ liệu ở bản chạy trên máy)
+4. *Quản trị → Tài khoản đăng nhập* → tạo tài khoản kế toán/điều vận, **cấp tài khoản cho từng tài xế** (đặt PIN)
+
+Thêm `?local=1` vào địa chỉ để chạy thử hoàn toàn trên máy. Không bao giờ đặt khoá `service_role` vào mã nguồn.
 
 ## Chạy thử trên máy
 ```powershell
