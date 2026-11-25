@@ -16,7 +16,7 @@
   };
   const ic = n => `<svg class="i" viewBox="0 0 24 24"><path d="${P[n]}"/></svg>`;
   const toast = m => { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2400); };
-  const CH = { ok: ['Hoàn thành', 'Đã duyệt', 'Đã chi', 'Đã xác nhận', 'Đã xử lý', 'Đã thanh toán'], warn: ['Chờ duyệt', 'Chờ xác nhận', 'Chưa bắt đầu', 'Chưa xử lý', 'Chưa thanh toán'], bad: ['Từ chối', 'Hủy'], info: ['Đang chạy', 'Đang xử lý'] };
+  const CH = { ok: ['Hoàn thành', 'Đã duyệt', 'Đã chi', 'Đã xác nhận', 'Đã xử lý', 'Đã thanh toán'], warn: ['Chờ duyệt', 'Chờ xác nhận', 'Chưa bắt đầu', 'Chưa xử lý', 'Chưa thanh toán'], bad: ['Từ chối', 'Hủy'], info: ['Đang chạy', 'Đang xử lý', 'Kế toán đã duyệt'] };
   const chip = v => `<span class="chip ${Object.keys(CH).find(k => CH[k].includes(v)) || ''}">${esc(v)}</span>`;
   const short = v => { v = U.num(v); return Math.abs(v) >= 1e9 ? (v / 1e9).toLocaleString('vi-VN', { maximumFractionDigits: 2 }) + ' tỷ' : Math.abs(v) >= 1e6 ? (v / 1e6).toLocaleString('vi-VN', { maximumFractionDigits: 1 }) + ' tr' : U.money(v); };
 
@@ -32,7 +32,7 @@
   const markSeen = () => localStorage.setItem(seenKey(), U.stamp());
   function updates() {
     const since = seenAt(), name = me().name, out = [];
-    Store.all('cost_request').forEach(r => { if (r.vehicle_id === S.vehicle_id && r.updated_at > since && r.updated_by !== name && ['Đã duyệt', 'Từ chối', 'Đã chi'].includes(r.status)) out.push(r); });
+    Store.all('cost_request').forEach(r => { if (r.vehicle_id === S.vehicle_id && r.updated_at > since && r.updated_by !== name && ['Kế toán đã duyệt', 'Đã duyệt', 'Từ chối', 'Đã chi'].includes(r.status)) out.push(r); });
     Store.all('revenue').forEach(r => { if (r.vehicle_id === S.vehicle_id && r.updated_at > since && r.updated_by !== name && ['Đã xác nhận', 'Từ chối'].includes(r.status)) out.push(r); });
     return out.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
   }
@@ -159,7 +159,7 @@
   const VIEWS = {
     home(el) {
       const act = myRoutes().filter(r => r.status === 'Đang chạy' || r.status === 'Chưa bắt đầu').sort((a, b) => (a.status === 'Đang chạy' ? -1 : 1));
-      const pend = Store.all('cost_request').filter(r => r.vehicle_id === S.vehicle_id && r.status === 'Chờ duyệt');
+      const pend = Store.all('cost_request').filter(r => r.vehicle_id === S.vehicle_id && (r.status === 'Chờ duyệt' || r.status === 'Kế toán đã duyệt'));
       const upd = updates();
       el.innerHTML = `${upd.length ? `<div class="sec"><h2>Văn phòng vừa xử lý (${upd.length})</h2><a data-tab="money">Đã xem</a></div>${upd.slice(0, 4).map(r => `<div class="card new"><div class="t"><div><b>${esc(r.code)}</b> · ${esc(r.category_id ? Store.label('cost_category', r.category_id) : r.type)}<div class="m">${esc(r.updated_by)} · ${U.date(r.updated_at)}${r.reject_reason ? '<br>Lý do: ' + esc(r.reject_reason) : ''}</div></div><div style="text-align:right"><div class="amt">${U.money(r.amount)}</div>${chip(r.status)}</div></div></div>`).join('')}` : ''}
         <div class="sec"><h2>Thao tác nhanh</h2></div>${quick()}
@@ -193,10 +193,12 @@
       const d = me(), v = car();
       const sal = Store.all('salary').filter(s => s.driver_id === d.id).slice(0, 6);
       const adv = Store.all('cost_request').filter(r => r.driver_id === d.id && r.pay_method === 'Tài xế ứng trước' && r.status === 'Đã duyệt').reduce((s, r) => s + U.num(r.amount), 0);
+      const unset = Store.all('route').filter(r => r.driver_id === d.id && r.status === 'Hoàn thành' && r.settle !== 'Đã quyết toán' && U.num(r.advance)).reduce((s, r) => s + U.num(r.advance), 0);
       const row = (l, val) => `<div class="kv"><span>${l}</span><b>${val || '—'}</b></div>`;
       const th = localStorage.getItem(THEME_KEY) || 'auto';
       el.innerHTML = `<div class="sec"><h2>Tài xế</h2></div><div class="card">${row('Họ tên', esc(d.name))}${row('Mã', esc(d.code))}${row('Điện thoại', esc(d.phone))}${row('Bằng lái', esc(d.license_class))}${row('Hạn GPLX', U.date(d.license_exp))}</div>
         <div class="card"><div class="t"><span>Công ty còn nợ bạn (đã duyệt, chưa chi)</span><b class="amt">${U.money(adv)} đ</b></div></div>
+        <div class="card"><div class="t"><span>Tạm ứng chuyến chưa quyết toán</span><b class="amt">${U.money(unset)} đ</b></div></div>
         <div class="sec"><h2>Xe ${esc(v.plate)}</h2></div><div class="card">${row('Chủng loại', esc(Store.label('vehicle_group', v.group_id)))}${row('Số km', U.money(v.odometer))}${row('Hạn đăng kiểm', U.date(v.inspection_exp))}${row('Hạn bảo hiểm', U.date(v.insurance_exp))}${row('Định mức dầu', v.fuel_norm ? v.fuel_norm + ' L/100km' : '')}</div>
         <div class="sec"><h2>Bảng lương</h2></div>${sal.map(s => `<div class="card"><div class="t"><span>Tháng ${esc(s.month)}</span><div style="text-align:right"><b class="amt">${U.money(s.total)}</b><br>${chip(s.status)}</div></div>${s.status === 'Gửi tài xế' ? `<div class="acts"><button class="btn sm ok" data-sal="${s.id}">Xác nhận lương</button></div>` : ''}</div>`).join('') || '<div class="empty">Chưa có bảng lương</div>'}
         <div class="sec"><h2>Giao diện</h2></div><div class="tabs" id="thm">${[['auto', 'Theo điện thoại'], ['light', 'Sáng'], ['dark', 'Tối']].map(([k, l]) => `<button data-th="${k}" class="${th === k ? 'on' : ''}">${l}</button>`).join('')}</div>

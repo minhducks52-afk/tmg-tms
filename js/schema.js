@@ -50,7 +50,9 @@
     f('vat_amount', 'Tiền VAT', 'money', { readonly: true, calc: r => Math.round(U.num(r.amount) * vatRate(r.vat)) }),
     f('total', 'Tổng tiền sau VAT', 'money', { sum: true, readonly: true, calc: r => U.num(r.amount) + Math.round(U.num(r.amount) * vatRate(r.vat)) }),
     f('invoice_no', 'Số hóa đơn'), f('invoice_date', 'Ngày cấp hóa đơn', 'date'),
-    f('pay_status', 'Trạng thái TT', 'select', { options: ['Chưa thanh toán', 'Đã thanh toán', 'Thanh toán chưa đủ'], def: 'Chưa thanh toán', badge: true })
+    f('pay_status', 'Trạng thái TT', 'select', { options: ['Chưa thanh toán', 'Đã thanh toán', 'Thanh toán chưa đủ'], def: 'Chưa thanh toán', badge: true }),
+    f('paid', 'Đã thu', 'money', { sum: true, readonly: true, virtual: r => Store.all('receipt_voucher').filter(x => x.invoice_id === r.id).reduce((s, x) => s + U.num(x.amount), 0) }),
+    f('remain', 'Còn phải thu', 'money', { sum: true, readonly: true, virtual: r => Math.max(0, U.num(r.total) - Store.all('receipt_voucher').filter(x => x.invoice_id === r.id).reduce((s, x) => s + U.num(x.amount), 0)) })
   ], { headerActions: ['buildInvoice'] });
 
   def('document', 'Chứng từ', 'Đơn hàng', [
@@ -75,8 +77,10 @@
     f('km_quota', 'Số km theo định mức', 'num'),
     f('advance', 'Tiền tạm ứng chuyến', 'money', { sum: true }),
     f('total_cost', 'Tổng CP', 'money', { sum: true, readonly: true, virtual: r => Store.all('cost_request').filter(c => c.route_id === r.id && ['Đã duyệt', 'Đã chi'].includes(c.status)).reduce((s, c) => s + U.num(c.amount), 0) + Store.all('route_fuel').filter(c => c.route_id === r.id).reduce((s, c) => s + U.num(c.total), 0) }),
+    f('settle', 'Quyết toán', 'select', { options: ['Chưa quyết toán', 'Đã quyết toán'], def: 'Chưa quyết toán', badge: true, lock: true }),
+    f('settle_amount', 'Số tiền quyết toán', 'money', { readonly: true, list: false }), f('settled_at', 'Ngày quyết toán', 'date', { readonly: true, list: false }),
     f('note', 'Ghi chú', 'textarea', { list: false })
-  ], { rowActions: ['approveRoute'] });
+  ], { rowActions: ['approveRoute', 'settleRoute'] });
 
   def('shipping_order', 'Lệnh vận chuyển', 'Vận hành', [
     f('code', 'Số lệnh', 'code', { prefix: 'LVC' }), f('route_id', 'Chuyến xe', 'ref', { ref: 'route', show: 'code' }), refVehicle(), refDriver(),
@@ -132,17 +136,19 @@
     f('pay_method', 'Hình thức', 'select', { options: ['Tài xế ứng trước', 'Đề nghị tạm ứng', 'Công ty chi trực tiếp'], def: 'Tài xế ứng trước' }),
     f('description', 'Nội dung', 'textarea', { required: true }),
     f('image', 'Ảnh chứng từ', 'image'),
-    f('status', 'Trạng thái', 'select', { options: ['Chờ duyệt', 'Đã duyệt', 'Từ chối', 'Đã chi'], def: 'Chờ duyệt', badge: true }),
-    f('approver', 'Người duyệt', 'text', { readonly: true }), f('approved_at', 'Ngày duyệt', 'datetime', { readonly: true, list: false }),
+    f('status', 'Trạng thái', 'select', { options: ['Chờ duyệt', 'Kế toán đã duyệt', 'Đã duyệt', 'Từ chối', 'Đã chi'], def: 'Chờ duyệt', badge: true, lock: true }),
+    f('acc_approver', 'Kế toán duyệt', 'text', { readonly: true }), f('acc_approved_at', 'Ngày kế toán duyệt', 'datetime', { readonly: true, list: false }),
+    f('approver', 'QTV xác nhận', 'text', { readonly: true }), f('approved_at', 'Ngày xác nhận', 'datetime', { readonly: true, list: false }),
     f('reject_reason', 'Lý do từ chối', 'text', { list: false }),
+    f('paid_at', 'Ngày chi', 'date', { readonly: true, list: false }), f('voucher_id', 'Phiếu chi', 'ref', { ref: 'payment_voucher', show: 'code', readonly: true, list: false }),
     f('source', 'Nguồn', 'select', { options: ['Web', 'App'], def: 'Web' })
-  ], { rowActions: ['approveCost'], note: 'Đề nghị "Đã duyệt" / "Đã chi" được tính vào chi phí vận hành của xe.' });
+  ], { rowActions: ['approveCost'], note: 'Duyệt 2 cấp: Kế toán duyệt (không giới hạn số tiền) → Quản trị viên xác nhận. Chỉ đề nghị "Đã duyệt" / "Đã chi" được tính vào chi phí của xe. Đánh dấu "Đã chi" tự tạo phiếu chi.' });
 
   def('op_cost', 'Chi phí vận hành', 'Tài chính', [
     f('code', 'Mã', 'code', { prefix: 'CP' }), f('date', 'Ngày hạch toán', 'date', { def: 'today', required: true }),
     refVehicle({ required: true }), refCat(),
     f('amount', 'Số tiền', 'money', { required: true, sum: true }),
-    f('period', 'Kỳ phân bổ', 'select', { options: ['Một lần', 'Tháng', 'Quý', 'Năm'], def: 'Một lần' }),
+    f('period', 'Kỳ phân bổ', 'select', { options: ['Một lần', 'Tháng', 'Quý', 'Năm'], def: 'Một lần', hint: 'Quý / Năm: số tiền được chia đều cho 3 / 12 tháng kể từ tháng hạch toán' }),
     f('supplier', 'Nhà cung cấp'), f('invoice_no', 'Số hóa đơn'), f('description', 'Diễn giải', 'textarea'),
     f('image', 'Chứng từ', 'image', { list: false })
   ], { note: 'Chi phí cố định/định kỳ theo đầu xe: khấu hao, bảo hiểm, đăng kiểm, phí đường bộ, lương, GPS, lãi vay...' });
@@ -151,12 +157,15 @@
     f('code', 'Mã phiếu thu', 'code', { prefix: 'PT' }), refCustomer({ required: true }), f('date', 'Ngày thu', 'date', { def: 'today' }),
     f('invoice_id', 'Bảng kê', 'ref', { ref: 'invoice', show: 'code' }), f('amount', 'Tổng tiền', 'money', { sum: true, required: true }),
     f('method', 'Hình thức', 'select', { options: ['Tiền mặt', 'Chuyển khoản'] }), f('note', 'Ghi chú')
-  ]);
+  ], { note: 'Phiếu thu gắn bảng kê sẽ tự cập nhật trạng thái thanh toán của bảng kê. Xem công nợ tại Báo cáo → Công nợ khách hàng.' });
   def('payment_voucher', 'Phiếu chi', 'Tài chính', [
     f('code', 'Mã', 'code', { prefix: 'PC' }), f('contractor_id', 'Nhà thầu', 'ref', { ref: 'contractor' }), refDriver(), refVehicle(),
     f('date', 'Ngày chi', 'date', { def: 'today' }), f('amount', 'Tổng tiền', 'money', { sum: true, required: true }),
-    f('method', 'Hình thức', 'select', { options: ['Tiền mặt', 'Chuyển khoản'] }), f('note', 'Ghi chú')
-  ]);
+    f('method', 'Hình thức', 'select', { options: ['Tiền mặt', 'Chuyển khoản'] }),
+    f('cost_request_id', 'Đề nghị chi phí', 'ref', { ref: 'cost_request', show: 'code', readonly: true }),
+    f('route_id', 'Quyết toán chuyến', 'ref', { ref: 'route', show: 'code', readonly: true, list: false }),
+    f('note', 'Ghi chú')
+  ], { note: 'Phiếu chi được tạo tự động khi đánh dấu đề nghị chi phí "Đã chi" hoặc quyết toán chuyến công ty còn nợ tài xế.' });
 
   /* ===== TÀI XẾ ===== */
   def('driver', 'Tài xế', 'Tài xế', [
@@ -184,8 +193,9 @@
     f('status', 'Trạng thái', 'select', { options: ['Tạo mới', 'Gửi tài xế', 'Chờ xác nhận', 'Đã xác nhận', 'Đã duyệt', 'Đã hủy'], def: 'Tạo mới', badge: true }),
     f('base', 'Lương cơ bản', 'money'), f('trip_salary', 'Lương chuyến', 'money'), f('allowance', 'Phụ cấp', 'money'),
     f('deduct', 'Khấu trừ / tạm ứng', 'money'),
+    f('trips', 'Số chuyến', 'num', { list: false }), f('note', 'Ghi chú', 'textarea', { list: false }),
     f('total', 'Thực lĩnh', 'money', { sum: true, readonly: true, calc: r => U.num(r.base) + U.num(r.trip_salary) + U.num(r.allowance) - U.num(r.deduct) })
-  ]);
+  ], { headerActions: ['calcSalary'] });
   def('contract_salary', 'Lương khoán', 'Tài xế', [f('road_id', 'Tuyến', 'ref', { ref: 'road' }), f('vehicle_group', 'Chủng loại xe', 'ref', { ref: 'vehicle_group' }), f('amount', 'Lương khoán / chuyến', 'money'), f('note', 'Ghi chú')]);
   def('incident', 'Sự cố', 'Tài xế', [
     f('code', 'Mã', 'code', { prefix: 'SC' }), f('kind', 'Loại', 'select', { options: ['Tai nạn giao thông', 'Hỏng xe dọc đường', 'Hư hỏng hàng hóa', 'Vi phạm kỷ luật', 'Bị phạt / CSGT giữ'] }),
@@ -264,7 +274,7 @@
     f('password', 'Mật khẩu', 'password', { list: false }), f('role_id', 'Quyền', 'ref', { ref: 'role' }),
     f('department_id', 'Cơ cấu tổ chức', 'ref', { ref: 'department' }), f('active', 'Trạng thái kích hoạt', 'select', { options: YN, def: 'Có' })
   ]);
-  def('role', 'Vai trò', 'Hệ thống', [f('name', 'Tên vai trò', 'text', { required: true }), f('approve_cost', 'Được duyệt chi phí', 'select', { options: YN, def: 'Không' }), f('note', 'Mô tả')]);
+  def('role', 'Vai trò', 'Hệ thống', [f('name', 'Tên vai trò', 'text', { required: true }), f('approve_cost', 'Được duyệt chi phí (cấp kế toán)', 'select', { options: YN, def: 'Không' }), f('final_approve', 'Được xác nhận duyệt chi (cấp quản trị)', 'select', { options: YN, def: 'Không' }), f('note', 'Mô tả')]);
   def('activity_log', 'Nhật ký', 'Hệ thống', [f('time', 'Thời gian', 'datetime'), f('user', 'Người dùng'), f('action', 'Hành động'), f('module', 'Module'), f('record', 'Bản ghi')], { readonlyModule: true });
 
   /* ===== MENU (theo sidebar CETA) ===== */
@@ -273,7 +283,7 @@
     { title: 'Đơn hàng', icon: 'doc', items: ['order', 'order_customer', 'invoice', 'document'] },
     { title: 'Vận hành', icon: 'truck', items: ['route', 'shipping_order', 'road', 'road_schedule', 'route_fuel', { id: 'board', title: 'Bảng điều vận', page: 'board' }] },
     { title: 'Doanh thu & Chi phí', icon: 'money', items: ['revenue', 'cost_request', 'op_cost', 'receipt_voucher', 'payment_voucher'] },
-    { title: 'Báo cáo', icon: 'chart', items: [{ id: 'rpt_vehicle', title: 'Lãi lỗ theo đầu xe', page: 'rptVehicle' }, { id: 'rpt_month', title: 'Doanh thu - chi phí theo tháng', page: 'rptMonth' }, { id: 'rpt_cat', title: 'Chi phí theo khoản mục', page: 'rptCat' }, { id: 'rpt_expiry', title: 'Cảnh báo hạn giấy tờ', page: 'rptExpiry' }] },
+    { title: 'Báo cáo', icon: 'chart', items: [{ id: 'rpt_vehicle', title: 'Lãi lỗ theo đầu xe', page: 'rptVehicle' }, { id: 'rpt_month', title: 'Doanh thu - chi phí theo tháng', page: 'rptMonth' }, { id: 'rpt_cat', title: 'Chi phí theo khoản mục', page: 'rptCat' }, { id: 'rpt_trip', title: 'Lãi lỗ theo chuyến', page: 'rptTrip' }, { id: 'rpt_fuel', title: 'Dầu: định mức và thực tế', page: 'rptFuel' }, { id: 'rpt_debt', title: 'Công nợ khách hàng', page: 'rptDebt' }, { id: 'rpt_settle', title: 'Quyết toán tạm ứng tài xế', page: 'rptSettle' }, { id: 'rpt_expiry', title: 'Cảnh báo hạn giấy tờ', page: 'rptExpiry' }] },
     { title: 'Tài xế', icon: 'user', items: ['driver', 'vehicle_team', 'advance_salary', 'time_sheet', 'salary', 'contract_salary', 'incident'] },
     { title: 'Xe', icon: 'car', items: ['vehicle', 'vehicle_group', 'contractor', 'trailer', 'container', 'repair_ticket', 'accessory', 'vehicle_tire', 'assets'] },
     { title: 'Khách hàng', icon: 'id', items: ['customer', 'project', 'contract', 'contact', 'customer_group'] },
@@ -291,7 +301,7 @@
     const put = (col, recs) => { db[col] = recs.map(r => Object.assign({ id: id(), created_at: now, created_by: 'Hệ thống', updated_at: '', updated_by: '' }, r)); db.__seq[col] = db[col].length; return db[col]; };
     const code = (p, i) => p + U.pad(i + 1);
 
-    const roles = put('role', [{ name: 'Quản trị viên', approve_cost: 'Có' }, { name: 'Kế toán', approve_cost: 'Có' }, { name: 'Điều vận', approve_cost: 'Không' }]);
+    const roles = put('role', [{ name: 'Quản trị viên', approve_cost: 'Có', final_approve: 'Có' }, { name: 'Kế toán', approve_cost: 'Có', final_approve: 'Không' }, { name: 'Điều vận', approve_cost: 'Không', final_approve: 'Không' }]);
     put('department', [{ name: 'Ban giám đốc' }, { name: 'Phòng điều vận' }, { name: 'Phòng kế toán' }]);
     put('admin', [
       { username: 'admin', name: 'Quản trị hệ thống', email: '', password: 'admin123', role_id: roles[0].id, active: 'Có' },

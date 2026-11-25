@@ -143,7 +143,7 @@
       SA.setSession({ id: adm.id, name: adm.name, username: adm.username });
       WA.location.hash = '#/p/dashboard'; await sleep(200);
       const fails = [];
-      const routes = Object.keys(WA.TMG_MODULES).map(k => 'm/' + k).concat(['p/dashboard', 'p/board', 'p/rpt_vehicle', 'p/rpt_vehicle/' + SA.all('vehicle')[0].id, 'p/rpt_month', 'p/rpt_cat', 'p/rpt_expiry', 'p/settings', 'p/backup', 'p/trash']);
+      const routes = Object.keys(WA.TMG_MODULES).map(k => 'm/' + k).concat(['p/dashboard', 'p/board', 'p/rpt_vehicle', 'p/rpt_vehicle/' + SA.all('vehicle')[0].id, 'p/rpt_month', 'p/rpt_cat', 'p/rpt_trip', 'p/rpt_fuel', 'p/rpt_debt', 'p/rpt_settle', 'p/rpt_expiry', 'p/settings', 'p/backup', 'p/trash']);
       for (const r of routes) {
         WA.location.hash = '#/' + r; await sleep(r === 'p/backup' ? 250 : 40);
         if (!WA.document.querySelector('.page-head h1')) fails.push('Không hiển thị ' + r);
@@ -182,6 +182,110 @@
       inp.value = v.plate; inp.dispatchEvent(new WA.Event('input')); await sleep(30);
       ok([...d.querySelectorAll('.palette .it')].some(x => x.textContent.includes(v.plate)), 'Tìm nhanh không ra biển số');
       WA.document.querySelector('#modal-root').innerHTML = '';
+      ok(!A.errors.length, A.errors.join('\n'));
+    });
+
+    /* ----- Giai đoạn 3: nghiệp vụ tài chính ----- */
+    const d3 = WA.document, q3 = s => d3.querySelector(s);
+    const login = un => { const u = SA.all('admin').find(a => a.username === un); SA.setSession({ id: u.id, name: u.name, username: u.username }); };
+    const openRec = async (mod, id) => { d3.querySelector('#modal-root').innerHTML = ''; WA.location.hash = '#/p/dashboard'; await sleep(60); WA.location.hash = `#/m/${mod}?id=${id}`; await sleep(120); };
+    const clickAct = async a => { const b = q3(`.drawer [data-a="${a}"]`); ok(b, 'Không có nút ' + a); b.click(); await sleep(60); };
+    await t('Duyệt 2 cấp: kế toán duyệt (không hạn mức) → QTV xác nhận → đã chi tự tạo phiếu chi', async () => {
+      WA.confirm = () => true; let msg = ''; WA.alert = m => { msg = m; };
+      const v = SA.all('vehicle')[0];
+      const c = SA.insert('cost_request', { code: SA.nextCode('cost_request', 'DN'), date: U.today(), vehicle_id: v.id, driver_id: v.driver_id, category_id: SA.all('cost_category')[0].id, amount: 987654321, pay_method: 'Tài xế ứng trước', description: 'Kiểm thử 2 cấp', status: 'Chờ duyệt' });
+      const cost0 = SA.finance({}).cost;
+      login('ketoan'); await openRec('cost_request', c.id); await clickAct('approveCost'); q3('#ap').click(); await sleep(60);
+      let r = SA.get('cost_request', c.id); eq([r.status, r.acc_approver], ['Kế toán đã duyệt', 'Kế toán'], 'Sau khi kế toán duyệt');
+      eq(SA.finance({}).cost, cost0, 'Chưa QTV xác nhận thì chưa tính chi phí');
+      await openRec('cost_request', c.id); await clickAct('approveCost');
+      ok(/chờ Quản trị viên/.test(msg), 'Kế toán không được tự xác nhận: ' + msg); eq(SA.get('cost_request', c.id).status, 'Kế toán đã duyệt');
+      login('admin'); await openRec('cost_request', c.id); await clickAct('approveCost'); q3('#ap').click(); await sleep(60);
+      r = SA.get('cost_request', c.id); eq([r.status, r.approver, r.acc_approver], ['Đã duyệt', 'Quản trị hệ thống', 'Kế toán'], 'Sau khi QTV xác nhận');
+      eq(SA.finance({}).cost, cost0 + 987654321, 'Đã duyệt thì tính chi phí');
+      login('ketoan'); await openRec('cost_request', c.id); await clickAct('approveCost');
+      r = SA.get('cost_request', c.id); eq(r.status, 'Đã chi');
+      const pc = SA.get('payment_voucher', r.voucher_id); ok(pc, 'Không tạo phiếu chi');
+      eq([pc.amount, pc.cost_request_id, pc.driver_id], [987654321, c.id, v.driver_id], 'Phiếu chi');
+      login('admin'); ok(!A.errors.length, A.errors.join('\n'));
+    });
+    await t('Duyệt 2 cấp: duyệt hàng loạt của kế toán chỉ lên "Kế toán đã duyệt"; điều vận không duyệt được', async () => {
+      WA.confirm = () => true; let msg = ''; WA.alert = m => { msg = m; };
+      const v = SA.all('vehicle')[1];
+      const ids = [1, 2].map(i => SA.insert('cost_request', { code: SA.nextCode('cost_request', 'DN'), date: U.today(), vehicle_id: v.id, category_id: SA.all('cost_category')[0].id, amount: 1000 * i, description: 'Hàng loạt ' + i, status: 'Chờ duyệt' }).id);
+      login('ketoan'); d3.querySelector('#modal-root').innerHTML = ''; WA.location.hash = '#/m/cost_request?s=Chờ duyệt'; await sleep(150);
+      for (const id of ids) { const cb = q3(`#g tr[data-id="${id}"] .cs`); ok(cb, 'Không thấy dòng ' + id); cb.checked = true; cb.dispatchEvent(new WA.Event('change')); }
+      q3('[data-b="approveCost"]').click(); await sleep(60);
+      eq(ids.map(id => SA.get('cost_request', id).status), ['Kế toán đã duyệt', 'Kế toán đã duyệt']);
+      login('dieuvan'); await openRec('cost_request', ids[0]); await clickAct('approveCost');
+      eq(SA.get('cost_request', ids[0]).status, 'Kế toán đã duyệt', 'Điều vận không được đổi trạng thái');
+      login('admin'); ok(!A.errors.length, A.errors.join('\n'));
+    });
+    await t('Sao chép đề nghị đã duyệt: bản sao về "Chờ duyệt", không mang người duyệt', async () => {
+      const src = SA.all('cost_request').find(x => x.status === 'Đã chi');
+      await openRec('cost_request', src.id); q3('.drawer [data-x="dup"]').click(); await sleep(80);
+      const f = q3('#mf'); eq([f.elements.status.value, f.elements.approver.value, f.elements.voucher_id.value], ['Chờ duyệt', '', '']);
+      d3.querySelector('#modal-root').innerHTML = '';
+    });
+    await t('Chi phí vận hành kỳ Quý: chia đều 3 tháng, tổng không đổi', () => {
+      const v = SA.all('vehicle')[2]; const m0 = '2019-03', ms = [m0, '2019-04', '2019-05'];
+      SA.insert('op_cost', { code: 'CP-T', date: m0 + '-15', vehicle_id: v.id, category_id: SA.all('cost_category')[0].id, amount: 3000001, period: 'Quý' });
+      const per = ms.map(m => SA.finance({ from: m + '-01', to: U.monthEnd(m), vehicle: v.id }).cost);
+      eq(per, [1000000, 1000000, 1000001]); eq(SA.finance({ from: '2019-06-01', to: '2019-06-30', vehicle: v.id }).cost, 0, 'Tháng thứ 4');
+    });
+    await t('Phiếu thu tự cập nhật trạng thái thanh toán bảng kê', async () => {
+      const cu = SA.all('customer')[0];
+      const inv = SA.insert('invoice', { code: SA.nextCode('invoice', 'BK'), customer_id: cu.id, amount: 1000000, vat: 'Không chịu thuế', total: 1000000, status: 'Đã xác nhận', pay_status: 'Chưa thanh toán' });
+      const pay = async amt => {
+        d3.querySelector('#modal-root').innerHTML = ''; WA.location.hash = '#/p/dashboard'; await sleep(50); WA.location.hash = '#/m/receipt_voucher'; await sleep(120);
+        q3('#add').click(); await sleep(50); const f = q3('#mf');
+        f.elements.customer_id.value = cu.id; f.elements.invoice_id.value = inv.id; f.elements.amount.value = amt; f.requestSubmit(); await sleep(80);
+      };
+      await pay('600.000'); eq(SA.get('invoice', inv.id).pay_status, 'Thanh toán chưa đủ');
+      await pay('400.000'); const r = SA.get('invoice', inv.id); eq([r.pay_status, r.status], ['Đã thanh toán', 'Đã thu tiền']);
+      eq(WA.TMG_MODULES.invoice.fields.find(x => x.k === 'remain').virtual(r), 0, 'Còn phải thu');
+      ok(!A.errors.length, A.errors.join('\n'));
+    });
+    await t('Cảnh báo trùng doanh thu khi nhập', async () => {
+      const ex = SA.all('revenue').find(x => x.status === 'Đã xác nhận' && !x.order_id) || SA.all('revenue').find(x => x.status === 'Đã xác nhận');
+      const n0 = SA.all('revenue').length; let msg = ''; WA.confirm = m => { msg = m; return false; };
+      d3.querySelector('#modal-root').innerHTML = ''; WA.location.hash = '#/m/revenue'; await sleep(120);
+      q3('#add').click(); await sleep(50); const f = q3('#mf');
+      f.elements.vehicle_id.value = ex.vehicle_id; f.elements.date.value = ex.date; f.elements.amount.value = U.money(ex.amount); f.elements.type.value = ex.type; f.elements.order_id.value = ex.order_id || '';
+      f.requestSubmit(); await sleep(60);
+      ok(/trùng/.test(msg), 'Không cảnh báo'); eq(SA.all('revenue').length, n0, 'Không được lưu khi chọn Huỷ');
+      WA.confirm = () => true; d3.querySelector('#modal-root').innerHTML = '';
+    });
+    await t('Quyết toán chuyến: tạm ứng − chi phí tài xế ứng − dầu tự trả; tạo phiếu chi phần công ty trả thêm', async () => {
+      WA.confirm = () => true;
+      const v = SA.all('vehicle')[0];
+      const rt = SA.insert('route', { code: SA.nextCode('route', 'CX'), status: 'Hoàn thành', vehicle_id: v.id, driver_id: v.driver_id, pickup_date: U.today(), advance: 2000000, settle: 'Chưa quyết toán' });
+      const c = SA.insert('cost_request', { code: SA.nextCode('cost_request', 'DN'), date: U.today(), vehicle_id: v.id, driver_id: v.driver_id, route_id: rt.id, category_id: SA.all('cost_category')[1].id, amount: 500000, pay_method: 'Tài xế ứng trước', description: 'BOT', status: 'Đã duyệt' });
+      const fu = SA.insert('route_fuel', { code: SA.nextCode('route_fuel', 'NL'), date: U.today(), vehicle_id: v.id, driver_id: v.driver_id, route_id: rt.id, liters: 90, price: 20000, total: 1800000, pay_type: 'Tự thanh toán', pay_status: 'Chưa thanh toán' });
+      await openRec('route', rt.id); await clickAct('settleRoute'); ok(/Công ty trả thêm 300\.000/.test(q3('#modal-root').innerText), 'Sai kết quả quyết toán'); q3('#ok').click(); await sleep(60);
+      const r = SA.get('route', rt.id); eq([r.settle, r.settle_amount], ['Đã quyết toán', -300000]);
+      eq([SA.get('cost_request', c.id).status, SA.get('route_fuel', fu.id).pay_status], ['Đã chi', 'Đã thanh toán']);
+      const pc = SA.all('payment_voucher').find(x => x.route_id === rt.id); ok(pc && pc.amount === 300000, 'Phiếu chi quyết toán');
+      ok(!A.errors.length, A.errors.join('\n'));
+    });
+    await t('Tính lương tháng: cơ bản + chuyến × định mức − tạm ứng; chạy lại không tạo trùng', async () => {
+      const dr = SA.all('driver')[1]; const veh = SA.get('vehicle', dr.vehicle_id); const road = SA.all('road')[0];
+      SA.update('driver', dr.id, { base_salary: 9000000 });
+      SA.insert('payroll', { road_id: road.id, vehicle_group: veh.group_id, amount: 500000 });
+      [3, 9].forEach(d => SA.insert('route', { code: SA.nextCode('route', 'CX'), status: 'Hoàn thành', vehicle_id: veh.id, driver_id: dr.id, from_location: road.from_location, to_location: road.to_location, pickup_date: '2020-01-0' + d }));
+      SA.insert('advance_salary', { code: 'TU-T', driver_id: dr.id, month: '1', year: 2020, amount: 1000000 });
+      const calc = async () => { d3.querySelector('#modal-root').innerHTML = ''; WA.location.hash = '#/p/dashboard'; await sleep(50); WA.location.hash = '#/m/salary'; await sleep(120); q3('#ha_calcSalary').click(); await sleep(40); q3('#sf').elements.m.value = '2020-01'; q3('#sf').requestSubmit(); await sleep(120); };
+      await calc();
+      const s = SA.all('salary').filter(x => x.driver_id === dr.id && x.month === '2020-01'); eq(s.length, 1, 'Số bảng lương');
+      eq([s[0].base, s[0].trip_salary, s[0].deduct, s[0].trips, s[0].total], [9000000, 1000000, 1000000, 2, 9000000]);
+      const n = SA.all('salary').length; await calc(); eq(SA.all('salary').length, n, 'Chạy lại tạo trùng');
+      ok(!A.errors.length, A.errors.join('\n'));
+    });
+    await t('Báo cáo công nợ / lãi lỗ chuyến / dầu / quyết toán hiển thị số liệu', async () => {
+      for (const p of ['rpt_debt', 'rpt_trip', 'rpt_fuel', 'rpt_settle']) {
+        d3.querySelector('#modal-root').innerHTML = ''; WA.location.hash = '#/p/' + p; await sleep(80);
+        ok(d3.querySelectorAll('.content table.grid tbody tr').length, 'Không có dòng: ' + p);
+      }
       ok(!A.errors.length, A.errors.join('\n'));
     });
 

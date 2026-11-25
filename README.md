@@ -16,7 +16,7 @@ Không cần cài đặt, không cần máy chủ: HTML/CSS/JavaScript thuần, 
 | Đơn hàng | Đơn hàng, đơn đặt hàng, bảng kê (tạo tự động từ đơn hoàn thành), chứng từ/POD |
 | Vận hành | Chuyến xe (phê duyệt chuyến, km thực tế, tổng CP), lệnh vận chuyển, tuyến đường, lịch trình tuyến, quản lý nhiên liệu, bảng điều vận kéo-thả |
 | **Doanh thu & Chi phí** | **Nhập doanh thu** (xác nhận doanh thu tài xế gửi), **Đề nghị chi phí** (duyệt / từ chối / đánh dấu đã chi, duyệt hàng loạt), **Chi phí vận hành** theo đầu xe, phiếu thu, phiếu chi |
-| Báo cáo | Lãi lỗ theo đầu xe (chi tiết từng xe), doanh thu - chi phí theo tháng, chi phí theo khoản mục × xe, cảnh báo hạn giấy tờ |
+| Báo cáo | Lãi lỗ theo đầu xe (chi tiết từng xe), doanh thu - chi phí theo tháng, chi phí theo khoản mục × xe, **lãi lỗ theo chuyến**, **dầu định mức và thực tế**, **công nợ khách hàng (tuổi nợ)**, **quyết toán tạm ứng tài xế**, cảnh báo hạn giấy tờ |
 | Tài xế / Xe / Khách hàng / Định mức / Danh mục | Đầy đủ danh mục như CETA (lương, chấm công, sự cố, rơ moóc, sửa chữa, lốp, hợp đồng, báo giá, định mức dầu…) |
 | Quản trị | Người dùng, vai trò (quyền duyệt chi), nhật ký, **thùng rác**, thiết lập, **sao lưu / khôi phục** |
 
@@ -37,9 +37,18 @@ Không cần cài đặt, không cần máy chủ: HTML/CSS/JavaScript thuần, 
 - **Thông báo** khi văn phòng duyệt / từ chối / xác nhận
 - Giao diện sáng/tối theo điện thoại; "Thêm vào màn hình chính" để dùng như app
 
+## Nghiệp vụ tài chính
+- **Duyệt chi 2 cấp**: Kế toán duyệt (không giới hạn số tiền) → trạng thái *Kế toán đã duyệt* → **Quản trị viên xác nhận** → *Đã duyệt*. Quản trị viên duyệt trực tiếp thì đi thẳng tới *Đã duyệt*. Chỉ đề nghị *Đã duyệt / Đã chi* được tính vào chi phí. Trên máy chủ, quy tắc này được chặn ở cơ sở dữ liệu.
+- **Đánh dấu Đã chi** tự tạo **phiếu chi** gắn với đề nghị.
+- **Quyết toán chuyến**: tạm ứng chuyến − chi phí tài xế đã ứng (đã duyệt, chưa chi) − dầu tài xế tự trả → tài xế hoàn lại hoặc công ty trả thêm (tự tạo phiếu chi).
+- **Phiếu thu** gắn bảng kê tự cập nhật trạng thái thanh toán; bảng kê có cột *Đã thu / Còn phải thu*.
+- **Tính lương tháng**: lương cơ bản + số chuyến hoàn thành × định mức lương (hoặc lương khoán theo tuyến) − tạm ứng lương.
+- **Chi phí vận hành kỳ Quý / Năm** được chia đều 3 / 12 tháng.
+- **Cảnh báo trùng doanh thu** (cùng đơn hàng, hoặc cùng xe + ngày + số tiền).
+
 ## Cách tính lãi lỗ theo đầu xe
 - **Doanh thu** = phiếu *Nhập doanh thu* ở trạng thái *Đã xác nhận*
-- **Chi phí** = Nhiên liệu + Đề nghị chi phí *Đã duyệt/Đã chi* + Phiếu sửa chữa *đã phê duyệt* + Chi phí vận hành
+- **Chi phí** = Nhiên liệu + Đề nghị chi phí *Đã duyệt/Đã chi* + Phiếu sửa chữa *đã phê duyệt* + Chi phí vận hành (đã phân bổ theo kỳ)
 - Bản ghi trong thùng rác không được tính
 
 ## Lưu trữ và an toàn dữ liệu

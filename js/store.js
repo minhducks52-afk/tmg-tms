@@ -539,7 +539,17 @@
     const rows = [];
     Store.all('revenue').forEach(r => { if (r.status !== 'Đã xác nhận' || !inRange(r.date) || !vOk(r.vehicle_id)) return; rows.push({ kind: 'rev', vehicle: r.vehicle_id, date: r.date, cat: r.type || 'Cước vận chuyển', amount: U.num(r.amount) }); });
     Store.all('cost_request').forEach(r => { if (!['Đã duyệt', 'Đã chi'].includes(r.status) || !inRange(r.date) || !vOk(r.vehicle_id)) return; rows.push({ kind: 'cost', src: 'Đề nghị chi phí', vehicle: r.vehicle_id, date: r.date, cat: Store.label('cost_category', r.category_id) || 'Khác', amount: U.num(r.amount) }); });
-    Store.all('op_cost').forEach(r => { if (!inRange(r.date) || !vOk(r.vehicle_id)) return; rows.push({ kind: 'cost', src: 'Chi phí vận hành', vehicle: r.vehicle_id, date: r.date, cat: Store.label('cost_category', r.category_id) || 'Khác', amount: U.num(r.amount) }); });
+    // Chi phí vận hành kỳ Quý / Năm: chia đều 3 / 12 tháng kể từ tháng hạch toán (phần lẻ dồn vào tháng cuối)
+    Store.all('op_cost').forEach(r => {
+      if (!vOk(r.vehicle_id)) return;
+      const n = { 'Quý': 3, 'Năm': 12 }[r.period] || 1; const total = U.num(r.amount); const each = Math.floor(total / n);
+      const d0 = String(r.date || '').slice(0, 10); const cat = Store.label('cost_category', r.category_id) || 'Khác';
+      for (let i = 0; i < n; i++) {
+        const date = i === 0 ? d0 : U.addMonths(d0.slice(0, 7), i) + '-01';
+        if ((n > 1 && !d0) || !inRange(date)) continue;
+        rows.push({ kind: 'cost', src: 'Chi phí vận hành', vehicle: r.vehicle_id, date, cat, amount: i === n - 1 ? total - each * (n - 1) : each });
+      }
+    });
     Store.all('route_fuel').forEach(r => { if (!inRange(r.date) || !vOk(r.vehicle_id)) return; rows.push({ kind: 'cost', src: 'Nhiên liệu', vehicle: r.vehicle_id, date: r.date, cat: 'Nhiên liệu', amount: U.num(r.total) }); });
     Store.all('repair_ticket').forEach(r => { if (r.approved !== 'Có' || !inRange(r.start_date) || !vOk(r.vehicle_id)) return; rows.push({ kind: 'cost', src: 'Sửa chữa', vehicle: r.vehicle_id, date: r.start_date, cat: 'Sửa chữa, bảo dưỡng', amount: U.num(r.total) }); });
     const revenue = rows.filter(r => r.kind === 'rev').reduce((s, r) => s + r.amount, 0);

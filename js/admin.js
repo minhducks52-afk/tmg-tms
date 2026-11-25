@@ -10,7 +10,7 @@
       .concat(g.title === 'Thiết lập' ? [{ id: 'cloud', title: CLOUD ? 'Máy chủ dữ liệu' : 'Máy chủ dữ liệu (chưa bật)', page: 'cloud' }] : [])
   }));
   if (CLOUD) { M.driver.fields = M.driver.fields.filter(f => f.k !== 'pin'); M.admin.fields = M.admin.fields.filter(f => f.k !== 'password'); }
-  const ROLE_LABEL = { admin: 'Quản trị viên', accountant: 'Kế toán (được duyệt chi)', dispatcher: 'Điều vận', driver: 'Tài xế' };
+  const ROLE_LABEL = { admin: 'Quản trị viên (xác nhận duyệt chi)', accountant: 'Kế toán (duyệt chi cấp 1)', dispatcher: 'Điều vận', driver: 'Tài xế' };
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
   const esc = U.esc;
@@ -46,12 +46,18 @@
   function toast(msg) { const box = $('#toast'); const d = document.createElement('div'); d.innerHTML = ic('check') + esc(msg); box.appendChild(d); setTimeout(() => d.remove(), 2600); }
   const session = () => Store.session();
   // Phải có vai trò được cấp quyền duyệt
-  const canApprove = () => { const s = session(); if (!s) return false; if (CLOUD) return ['admin', 'accountant'].includes(s.role); const u = Store.get('admin', s.id); const r = u && Store.get('role', u.role_id); return !!r && r.approve_cost === 'Có'; };
+  const myRole = () => { const s = session(); const u = s && Store.get('admin', s.id); return u && Store.get('role', u.role_id); };
+  // Cấp 1 (kế toán): duyệt đề nghị chi, không giới hạn số tiền
+  const canApprove = () => { const s = session(); if (!s) return false; if (CLOUD) return ['admin', 'accountant'].includes(s.role); const r = myRole(); return !!r && (r.approve_cost === 'Có' || isFinal()); };
+  // Cấp 2 (quản trị viên): xác nhận duyệt cuối. Dữ liệu cũ chưa có cột này -> dựa vào tên vai trò "Quản trị…"
+  function isFinal() { const s = session(); if (!s) return false; if (CLOUD) return s.role === 'admin'; const r = myRole(); return !!r && (r.final_approve ? r.final_approve === 'Có' : /quản trị/i.test(r.name || '')); }
+  const APPROVED = ['Đã duyệt', 'Đã chi'];
   const BADGE = {
     ok: ['Hoàn thành', 'Đã xác nhận', 'Đã duyệt', 'Đã chi', 'Đã thanh toán', 'Đã phê duyệt', 'Có', 'Đã thu tiền', 'Đã xử lý', 'Xe trống', 'Hoạt động', 'Đã tạo đơn'],
     warn: ['Chờ duyệt', 'Chờ xác nhận', 'Chờ tài xế xác nhận', 'Chờ nhận hàng', 'Chưa phê duyệt', 'Thanh toán chưa đủ', 'Đang xử lý', 'Chưa thanh toán', 'Gửi tài xế', 'Mới', 'Chưa xử lý', 'Chưa bắt đầu', 'Khởi tạo', 'Tạo mới'],
     bad: ['Hủy', 'Từ chối', 'Đã hủy', 'Xe hỏng', 'Xe công an giữ', 'Không'],
-    info: ['Đang vận chuyển', 'Đang chạy', 'Xe đang vận chuyển', 'Sẵn sàng', 'Đã cấp số hóa đơn', 'Đã tiếp nhận']
+    info: ['Đang vận chuyển', 'Đang chạy', 'Xe đang vận chuyển', 'Sẵn sàng', 'Đã cấp số hóa đơn', 'Đã tiếp nhận', 'Kế toán đã duyệt', 'Đã quyết toán'],
+    neutral: ['Chưa quyết toán']
   };
   const chip = (v, kind) => { if (!v) return ''; const k = kind || Object.keys(BADGE).find(k => BADGE[k].includes(v)); return `<span class="chip ${k || ''}">${esc(v)}</span>`; };
   const refLabel = (fd, id) => { if (!id) return ''; const r = Store.get(fd.ref, id); return r ? (r[fd.show || 'name'] ?? r.name ?? r.plate ?? r.code ?? '') : ''; };
@@ -267,10 +273,12 @@
   function notifications() {
     const n = [];
     const pc = Store.all('cost_request').filter(r => r.status === 'Chờ duyệt').length;
+    const pf = isFinal() ? Store.all('cost_request').filter(r => r.status === 'Kế toán đã duyệt').length : 0;
     const pr = Store.all('revenue').filter(r => r.status === 'Chờ xác nhận').length;
     const ex = expiries().filter(x => x.days <= 30).length;
     const inc = Store.all('incident').filter(r => r.status === 'Chưa xử lý').length;
-    if (pc) n.push({ icon: 'receipt', text: `<b>${pc}</b> đề nghị chi phí chờ duyệt`, href: '#/m/cost_request?s=Chờ duyệt' });
+    if (pf) n.push({ icon: 'check', text: `<b>${pf}</b> đề nghị kế toán đã duyệt, chờ bạn xác nhận`, href: '#/m/cost_request?s=Kế toán đã duyệt' });
+    if (pc) n.push({ icon: 'receipt', text: `<b>${pc}</b> đề nghị chi phí chờ kế toán duyệt`, href: '#/m/cost_request?s=Chờ duyệt' });
     if (pr) n.push({ icon: 'dollar', text: `<b>${pr}</b> doanh thu chờ xác nhận`, href: '#/m/revenue?s=Chờ xác nhận' });
     if (ex) n.push({ icon: 'clock', text: `<b>${ex}</b> giấy tờ sắp/đã hết hạn`, href: '#/p/rpt_expiry' });
     if (inc) n.push({ icon: 'alert', text: `<b>${inc}</b> sự cố chưa xử lý`, href: '#/m/incident?s=Chưa xử lý' });
@@ -280,7 +288,7 @@
     const b = $('#bn'); if (!b) return;
     const c = notifications().length; b.textContent = c || ''; b.style.display = c ? '' : 'none';
     const badge = (id, n) => { const e = $(`[data-badge="${id}"]`); if (e) { e.textContent = n; e.style.display = n ? '' : 'none'; } };
-    badge('cost_request', Store.all('cost_request').filter(r => r.status === 'Chờ duyệt').length);
+    badge('cost_request', Store.all('cost_request').filter(r => r.status === 'Chờ duyệt' || (isFinal() && r.status === 'Kế toán đã duyệt')).length);
     badge('revenue', Store.all('revenue').filter(r => r.status === 'Chờ xác nhận').length);
     badge('incident', Store.all('incident').filter(r => r.status === 'Chưa xử lý').length);
   }
@@ -506,7 +514,7 @@
         const x = b.dataset.x; const rec = Store.get(mod.key, id);
         if (x === 'edit') { close(); openForm(mod, rec, after); }
         else if (x === 'dup') { close(); duplicate(mod, rec, after); }
-        else if (confirm('Chuyển bản ghi này vào thùng rác?')) { Store.remove(mod.key, id); close(); toast('Đã chuyển vào thùng rác'); after && after(); refreshBell(); }
+        else if (confirm('Chuyển bản ghi này vào thùng rác?')) { Store.remove(mod.key, id); if (AFTER_SAVE[mod.key]) AFTER_SAVE[mod.key](null, rec); close(); toast('Đã chuyển vào thùng rác'); after && after(); refreshBell(); }
       });
       $$('a[href^="#"]', layer).forEach(a => a.addEventListener('click', () => close()));
     });
@@ -516,7 +524,7 @@
   const SECTIONS = [['Thông tin chung', f => !isNum(f) && !['textarea', 'image', 'refs'].includes(f.type)], ['Số tiền & số liệu', isNum], ['Chi tiết & chứng từ', f => ['textarea', 'image', 'refs'].includes(f.type)]];
   function fieldHTML(fd, v) {
     const req = fd.required ? ' <span class="req">*</span>' : '';
-    const name = `name="${fd.k}"`; const ro = fd.readonly; const r = ro ? 'readonly' : '';
+    const name = `name="${fd.k}"`; const ro = fd.readonly || (fd.lock && !isFinal()); const r = ro ? 'readonly' : '';
     let inp;
     switch (fd.type) {
       case 'textarea': inp = `<textarea ${name} rows="2" ${r}>${esc(v)}</textarea>`; break;
@@ -532,7 +540,7 @@
       case 'code': inp = `<input ${name} value="${esc(v)}" placeholder="Tự động" ${r}>`; break;
       default: inp = `<input ${name} value="${esc(v)}" ${r}>`;
     }
-    return `<div class="field ${['textarea', 'refs', 'image'].includes(fd.type) ? 'wide' : ''}"><label>${esc(fd.label)}${req}</label>${inp}</div>`;
+    return `<div class="field ${['textarea', 'refs', 'image'].includes(fd.type) ? 'wide' : ''}"><label>${esc(fd.label)}${req}</label>${inp}${fd.hint ? `<div class="hint">${esc(fd.hint)}</div>` : ''}</div>`;
   }
   // Ô chọn có tìm kiếm (thay <select> cho danh sách dài)
   function initCombos(root, mod) {
@@ -578,6 +586,8 @@
     const editing = rec && rec.id && !isDup;
     const data = rec ? Object.assign({}, rec) : {};
     if (!rec) mod.fields.forEach(fd => { data[fd.k] = defVal(fd); });
+    // Bản sao không mang theo trạng thái duyệt / quyết toán / thông tin do hệ thống ghi
+    else if (!editing) mod.fields.forEach(fd => { if (fd.lock) data[fd.k] = defVal(fd); else if (fd.readonly && !fd.calc && !fd.virtual) data[fd.k] = ''; });
     applyCalc(mod, data);
     const fs = mod.fields.filter(fd => !fd.virtual);
     const secs = SECTIONS.map(([t, test]) => [t, fs.filter(test)]).filter(([, l]) => l.length);
@@ -608,8 +618,11 @@
           if (miss.length) { $('#ferr', layer).textContent = 'Vui lòng nhập: ' + miss.map(m => m.label).join(', '); return; }
           const cf = mod.fields.find(fd => fd.type === 'code');
           if (cf && !r[cf.k]) r[cf.k] = Store.nextCode(mod.key, cf.prefix);
-          if (editing) { Store.update(mod.key, rec.id, r); toast('Đã lưu'); }
-          else { delete r.id; Store.insert(mod.key, r); toast('Đã thêm ' + (titleOf(r) || '')); }
+          if (BEFORE_SAVE[mod.key]) { const w = BEFORE_SAVE[mod.key](r, editing ? rec.id : null); if (w && !confirm(w)) return; }
+          let saved;
+          if (editing) { saved = Store.update(mod.key, rec.id, r); toast('Đã lưu'); }
+          else { delete r.id; saved = Store.insert(mod.key, r); toast('Đã thêm ' + (titleOf(r) || '')); }
+          if (AFTER_SAVE[mod.key]) AFTER_SAVE[mod.key](saved, editing ? rec : null);
           close(); after && after(); refreshBell();
           if (more) openForm(mod, null, after);
         };
@@ -618,22 +631,86 @@
   }
 
   /* ---------- Row / bulk / header actions ---------- */
-  const approveRec = (r, ok) => { const s = session(); Store.update('cost_request', r.id, ok === true ? { status: 'Đã duyệt', approver: s.name, approved_at: U.now(), reject_reason: '' } : { status: 'Từ chối', approver: s.name, approved_at: U.now(), reject_reason: ok }); };
+  // Duyệt 2 cấp: Kế toán duyệt (không giới hạn số tiền) -> Quản trị viên xác nhận -> "Đã duyệt".
+  // Quản trị viên duyệt một đề nghị "Chờ duyệt" thì đi thẳng tới "Đã duyệt".
+  const approveRec = (r, ok) => {
+    const s = session(); const t = U.now();
+    if (ok !== true) return Store.update('cost_request', r.id, { status: 'Từ chối', approver: s.name, approved_at: t, reject_reason: ok });
+    if (r.status === 'Chờ duyệt' && !isFinal()) return Store.update('cost_request', r.id, { status: 'Kế toán đã duyệt', acc_approver: s.name, acc_approved_at: t, reject_reason: '' });
+    return Store.update('cost_request', r.id, { status: 'Đã duyệt', approver: s.name, approved_at: t, acc_approver: r.acc_approver || s.name, acc_approved_at: r.acc_approved_at || t, reject_reason: '' });
+  };
+  const canStep = r => (r.status === 'Chờ duyệt' && canApprove()) || (r.status === 'Kế toán đã duyệt' && isFinal());
+  // Đánh dấu "Đã chi" + tự tạo phiếu chi
+  function markPaid(r, method) {
+    const pc = Store.insert('payment_voucher', { code: Store.nextCode('payment_voucher', 'PC'), driver_id: r.driver_id || '', vehicle_id: r.vehicle_id || '', date: U.today(), amount: U.num(r.amount), method: method || 'Tiền mặt', cost_request_id: r.id, note: 'Chi đề nghị ' + (r.code || '') + (r.description ? ' - ' + r.description : '') });
+    Store.update('cost_request', r.id, { status: 'Đã chi', paid_at: U.today(), voucher_id: pc.id });
+    return pc;
+  }
+  // Quyết toán chuyến: tạm ứng chuyến - chi phí tài xế đã ứng (đã duyệt, chưa chi) - dầu tài xế tự trả
+  function settlement(rt) {
+    const own = c => c.route_id === rt.id && c.pay_method !== 'Công ty chi trực tiếp';
+    const reqs = Store.all('cost_request').filter(c => own(c) && c.status === 'Đã duyệt');
+    const pending = Store.all('cost_request').filter(c => own(c) && ['Chờ duyệt', 'Kế toán đã duyệt'].includes(c.status));
+    const fuels = Store.all('route_fuel').filter(f => f.route_id === rt.id && f.pay_type === 'Tự thanh toán' && f.pay_status !== 'Đã thanh toán');
+    const spent = reqs.reduce((a, c) => a + U.num(c.amount), 0) + fuels.reduce((a, f) => a + U.num(f.total), 0);
+    const advance = U.num(rt.advance);
+    return { reqs, pending, fuels, advance, spent, balance: advance - spent }; // balance > 0: tài xế hoàn lại; < 0: công ty trả thêm
+  }
   const ROW_ACTIONS = {
     approveCost: {
-      show: r => r.status === 'Chờ duyệt' || r.status === 'Đã duyệt',
-      icon: r => r.status === 'Chờ duyệt' ? 'check' : 'dollar', label: r => r.status === 'Chờ duyệt' ? 'Duyệt / từ chối' : 'Đánh dấu đã chi',
+      show: r => ['Chờ duyệt', 'Kế toán đã duyệt', 'Đã duyệt'].includes(r.status),
+      icon: r => r.status === 'Đã duyệt' ? 'dollar' : 'check',
+      label: r => r.status === 'Chờ duyệt' ? 'Duyệt / từ chối' : r.status === 'Kế toán đã duyệt' ? 'Xác nhận duyệt (QTV)' : 'Đánh dấu đã chi',
       run(r, draw) {
+        if (r.status === 'Đã duyệt') {
+          if (!canApprove()) return alert('Vai trò của bạn không có quyền chi tiền.');
+          if (confirm(`Xác nhận đã chi ${U.money(r.amount)} đ cho ${Store.label('driver', r.driver_id) || 'đề nghị này'}?\nHệ thống sẽ tự tạo phiếu chi.`)) { const pc = markPaid(r); toast('Đã chi, tạo phiếu ' + pc.code); draw && draw(); refreshBell(); }
+          return;
+        }
+        if (r.status === 'Kế toán đã duyệt' && !isFinal()) return alert(`Đề nghị đã được kế toán ${r.acc_approver || ''} duyệt, đang chờ Quản trị viên xác nhận.`);
         if (!canApprove()) return alert('Vai trò của bạn không có quyền duyệt chi phí.');
-        if (r.status === 'Đã duyệt') { if (confirm(`Xác nhận đã chi ${U.money(r.amount)} đ cho ${Store.label('driver', r.driver_id) || 'đề nghị này'}?`)) { Store.update('cost_request', r.id, { status: 'Đã chi' }); toast('Đã chi'); draw && draw(); } return; }
-        reviewModal('Duyệt đề nghị chi phí', [
+        const lvl2 = r.status === 'Kế toán đã duyệt';
+        reviewModal(lvl2 ? 'Xác nhận duyệt chi (Quản trị viên)' : (isFinal() ? 'Duyệt đề nghị chi phí (Quản trị viên)' : 'Duyệt đề nghị chi phí (Kế toán)'), [
           ['Mã', esc(r.code)], ['Xe', esc(Store.label('vehicle', r.vehicle_id))], ['Tài xế', esc(Store.label('driver', r.driver_id))], ['Khoản mục', esc(Store.label('cost_category', r.category_id))],
           ['Số tiền', `<b>${U.money(r.amount)} đ</b>`], ['Ngày', U.date(r.date)], ['Nội dung', esc(r.description)], ['Hình thức', esc(r.pay_method)]
-        ], r.image, ok => { approveRec(r, ok); toast(ok === true ? 'Đã duyệt ' + r.code : 'Đã từ chối ' + r.code); draw && draw(); refreshBell(); });
+        ].concat(lvl2 ? [['Kế toán duyệt', esc((r.acc_approver || '') + ' · ' + U.date(r.acc_approved_at))]] : [['Sau khi duyệt', isFinal() ? 'Đã duyệt (tính vào chi phí xe)' : 'Chuyển Quản trị viên xác nhận']]), r.image,
+        ok => { approveRec(r, ok); const n = Store.get('cost_request', r.id); toast(ok === true ? (n.status === 'Đã duyệt' ? 'Đã duyệt ' : 'Kế toán đã duyệt, chờ QTV xác nhận: ') + r.code : 'Đã từ chối ' + r.code); draw && draw(); refreshBell(); });
       },
-      bulk: { label: 'Duyệt', ok: r => r.status === 'Chờ duyệt', run(list) { if (!canApprove()) { alert('Vai trò của bạn không có quyền duyệt chi phí.'); return false; } const sum = list.reduce((s, r) => s + U.num(r.amount), 0); if (!confirm(`Duyệt ${list.length} đề nghị, tổng ${U.money(sum)} đ?`)) return false; list.forEach(r => approveRec(r, true)); toast(`Đã duyệt ${list.length} đề nghị`); } }
+      bulk: {
+        label: 'Duyệt', ok: r => canStep(r),
+        run(list) {
+          if (!canApprove()) { alert('Vai trò của bạn không có quyền duyệt chi phí.'); return false; }
+          const sum = list.reduce((s, r) => s + U.num(r.amount), 0);
+          if (!confirm(`${isFinal() ? 'Duyệt (Quản trị viên)' : 'Duyệt cấp kế toán'} ${list.length} đề nghị, tổng ${U.money(sum)} đ?`)) return false;
+          list.forEach(r => approveRec(r, true)); toast(`Đã duyệt ${list.length} đề nghị`); refreshBell();
+        }
+      }
     },
-    confirmRevenue: {
+    settleRoute: {
+      show: r => r.status === 'Hoàn thành' && r.settle !== 'Đã quyết toán', icon: () => 'cash', label: () => 'Quyết toán chuyến',
+      run(r, draw) {
+        if (!canApprove()) return alert('Chỉ Kế toán / Quản trị viên được quyết toán chuyến.');
+        const st = settlement(r); const drv = Store.label('driver', r.driver_id) || 'tài xế';
+        const line = (t, v) => `<div>${t}</div><div>${v}</div>`;
+        overlay(`<div class="modal sm"><div class="m-h"><h3>Quyết toán chuyến ${esc(r.code)}</h3><button class="btn ghost icon" data-close>${ic('x')}</button></div>
+          <div class="m-b"><div class="dl">${line('Tài xế', esc(drv))}${line('Xe', esc(Store.label('vehicle', r.vehicle_id)))}${line('Tạm ứng chuyến', U.money(st.advance) + ' đ')}
+          ${line('Chi phí tài xế đã ứng', `${U.money(st.reqs.reduce((a, c) => a + U.num(c.amount), 0))} đ <span class="muted">(${st.reqs.length} đề nghị đã duyệt, chưa chi)</span>`)}
+          ${line('Dầu tài xế tự trả', `${U.money(st.fuels.reduce((a, f) => a + U.num(f.total), 0))} đ <span class="muted">(${st.fuels.length} lần)</span>`)}
+          ${line('Kết quả', `<b>${st.balance >= 0 ? `Tài xế hoàn lại ${U.money(st.balance)} đ` : `Công ty trả thêm ${U.money(-st.balance)} đ`}</b>`)}</div>
+          ${st.pending.length ? `<div class="err" style="margin-top:12px">${st.pending.length} đề nghị trên chuyến còn chờ duyệt — chưa được tính. Nên duyệt xong trước khi quyết toán.</div>` : ''}
+          <div class="hint" style="margin-top:10px">Khi quyết toán: các đề nghị trên chuyển "Đã chi", dầu tự trả chuyển "Đã thanh toán"${st.balance < 0 ? ', tạo phiếu chi phần công ty trả thêm' : ''}.</div></div>
+          <div class="m-f"><button class="btn" data-close>Huỷ</button><button class="btn ok" id="ok">${ic('check')} Quyết toán</button></div></div>`, (layer, close) => {
+          $('#ok', layer).onclick = () => {
+            let pc = null;
+            if (st.balance < 0) pc = Store.insert('payment_voucher', { code: Store.nextCode('payment_voucher', 'PC'), driver_id: r.driver_id || '', vehicle_id: r.vehicle_id || '', date: U.today(), amount: -st.balance, method: 'Tiền mặt', route_id: r.id, note: 'Quyết toán chuyến ' + r.code });
+            st.reqs.forEach(c => Store.update('cost_request', c.id, { status: 'Đã chi', paid_at: U.today(), voucher_id: pc ? pc.id : '', note: 'Quyết toán chuyến ' + r.code }));
+            st.fuels.forEach(f => Store.update('route_fuel', f.id, { pay_status: 'Đã thanh toán' }));
+            Store.update('route', r.id, { settle: 'Đã quyết toán', settle_amount: st.balance, settled_at: U.today() });
+            close(); toast('Đã quyết toán chuyến ' + r.code + (pc ? ', tạo phiếu ' + pc.code : '')); draw && draw(); refreshBell();
+          };
+        });
+      }
+    },    confirmRevenue: {
       show: r => r.status === 'Chờ xác nhận', icon: () => 'check', label: () => 'Xác nhận doanh thu',
       run(r, draw) {
         reviewModal('Xác nhận doanh thu', [['Mã', esc(r.code)], ['Xe', esc(Store.label('vehicle', r.vehicle_id))], ['Tài xế', esc(Store.label('driver', r.driver_id))], ['Khách hàng', esc(Store.label('customer', r.customer_id))], ['Loại', esc(r.type)], ['Số tiền', `<b>${U.money(r.amount)} đ</b>`], ['Hình thức thu', esc(r.collect)], ['Ghi chú', esc(r.note)]], r.image,
@@ -677,8 +754,72 @@
         });
       }
     }
+    ,
+    calcSalary: {
+      btn: `<button class="btn" id="ha_calcSalary">${ic('cash')} Tính lương tháng</button>`,
+      run(draw) {
+        overlay(`<form class="modal sm" id="sf"><div class="m-h"><h3>Tính lương tài xế</h3><button type="button" class="btn ghost icon" data-close>${ic('x')}</button></div>
+          <div class="m-b"><div class="field"><label>Tháng</label><input type="month" name="m" value="${U.today().slice(0, 7)}" required></div>
+          <div class="hint">Lương cơ bản (hồ sơ tài xế) + lương chuyến (chuyến hoàn thành trong tháng × Định mức lương tài xế, hoặc Lương khoán theo tuyến) − tạm ứng lương tháng đó. Tài xế đã có bảng lương tháng này được bỏ qua.</div></div>
+          <div class="m-f"><button type="button" class="btn" data-close>Huỷ</button><button class="btn primary">Tính lương</button></div></form>`, (layer, close) => {
+          $('#sf', layer).onsubmit = e => {
+            e.preventDefault(); const ym = new FormData(e.target).get('m'); if (!ym) return;
+            const res = salaryFor(ym); close();
+            toast(`Đã tạo ${res.created} bảng lương tháng ${ym.slice(5)}/${ym.slice(0, 4)}` + (res.skipped ? `, bỏ qua ${res.skipped} đã có` : ''));
+            if (res.noNorm) setTimeout(() => alert(`${res.noNorm} chuyến chưa có định mức lương (Định mức → Định mức lương tài xế / Lương khoán) nên lương chuyến = 0.`), 50);
+            draw();
+          };
+        });
+      }
+    }  };
+  /* ---------- Nghiệp vụ tài chính (giai đoạn 3) ---------- */
+  // Lương tháng: cơ bản + chuyến × định mức - tạm ứng lương
+  function tripWage(rt) {
+    const veh = Store.get('vehicle', rt.vehicle_id); const grp = veh && veh.group_id;
+    const road = Store.all('road').find(x => x.from_location && x.from_location === rt.from_location && x.to_location === rt.to_location);
+    if (!road) return null;
+    const pick = list => list.find(x => x.road_id === road.id && x.vehicle_group === grp) || list.find(x => x.road_id === road.id && !x.vehicle_group);
+    const p = pick(Store.all('payroll')) || pick(Store.all('contract_salary'));
+    return p ? U.num(p.amount) : null;
+  }
+  function salaryFor(ym) {
+    const from = ym + '-01', to = monthEnd(ym); let created = 0, skipped = 0, noNorm = 0;
+    const have = new Set(Store.all('salary').filter(x => x.month === ym && x.status !== 'Đã hủy').map(x => x.driver_id));
+    Store.all('driver').filter(d => d.active !== 'Không').forEach(d => {
+      if (have.has(d.id)) { skipped++; return; }
+      const trips = Store.all('route').filter(r => r.driver_id === d.id && r.status === 'Hoàn thành' && (r.drop_date || r.pickup_date || '') >= from && (r.drop_date || r.pickup_date || '') <= to);
+      let wage = 0; trips.forEach(r => { const w = tripWage(r); if (w == null) noNorm++; else wage += w; });
+      const deduct = Store.all('advance_salary').filter(a => a.driver_id === d.id && String(a.month) === String(+ym.slice(5)) && String(a.year) === ym.slice(0, 4)).reduce((s, a) => s + U.num(a.amount), 0);
+      const base = U.num(d.base_salary);
+      if (!base && !trips.length) return;
+      Store.insert('salary', applyCalc(M.salary, { code: Store.nextCode('salary', 'BL'), driver_id: d.id, month: ym, status: 'Tạo mới', base, trip_salary: wage, allowance: 0, deduct, trips: trips.length, note: `Tự tính: ${trips.length} chuyến hoàn thành` }));
+      created++;
+    });
+    return { created, skipped, noNorm };
+  }
+  // Bảng kê: cập nhật trạng thái thanh toán theo phiếu thu
+  function syncInvoice(id) {
+    const inv = id && Store.get('invoice', id); if (!inv || inv._deleted) return;
+    const paid = Store.all('receipt_voucher').filter(x => x.invoice_id === id).reduce((s, x) => s + U.num(x.amount), 0);
+    const total = U.num(inv.total) || U.num(inv.amount);
+    const pay = paid <= 0 ? 'Chưa thanh toán' : paid >= total ? 'Đã thanh toán' : 'Thanh toán chưa đủ';
+    const patch = {};
+    if (inv.pay_status !== pay) patch.pay_status = pay;
+    if (pay === 'Đã thanh toán' && !['Đã thu tiền', 'Đã hủy'].includes(inv.status)) patch.status = 'Đã thu tiền';
+    if (pay !== 'Đã thanh toán' && inv.status === 'Đã thu tiền') patch.status = 'Đã xác nhận';
+    if (Object.keys(patch).length) Store.update('invoice', id, patch);
+  }
+  const AFTER_SAVE = {
+    receipt_voucher: (r, old) => { syncInvoice(r && r.invoice_id); if (old && old.invoice_id && (!r || old.invoice_id !== r.invoice_id)) syncInvoice(old.invoice_id); }
   };
-  function reviewModal(title, rows, img, done) {
+  // Cảnh báo trước khi lưu (trả về câu hỏi xác nhận, rỗng = không cảnh báo)
+  const BEFORE_SAVE = {
+    revenue(r, selfId) {
+      const dup = Store.all('revenue').find(x => x.id !== selfId && x.status !== 'Từ chối' && (x.type || '') === (r.type || '') &&
+        ((r.order_id && x.order_id === r.order_id) || (x.vehicle_id === r.vehicle_id && x.date === r.date && U.num(x.amount) === U.num(r.amount))));
+      return dup ? `Có thể trùng doanh thu: phiếu ${dup.code} (${U.date(dup.date)}, ${Store.label('vehicle', dup.vehicle_id)}, ${U.money(dup.amount)} đ, ${dup.type || ''}).\nVẫn lưu?` : '';
+    }
+  };  function reviewModal(title, rows, img, done) {
     overlay(`<div class="modal sm"><div class="m-h"><h3>${title}</h3><button class="btn ghost icon" data-close>${ic('x')}</button></div>
       <div class="m-b"><div class="dl">${rows.map(x => `<div>${x[0]}</div><div>${x[1] || '—'}</div>`).join('')}</div>
       ${img ? `<div style="margin-top:12px">${Store.img(img, 'data-zoom style="max-width:100%;border-radius:8px" alt="Chứng từ"')}</div>` : '<div class="muted" style="margin-top:10px">Không có ảnh chứng từ</div>'}
@@ -737,6 +878,19 @@
   }
 
   /* ---------- Pages ---------- */
+  // Trang báo cáo có chọn khoảng ngày + xuất Excel; body(st, redraw) trả về HTML
+  function exportTable(t, name) { if (!t) return; const lines = [...t.rows].map(tr => [...tr.cells].map(c => '"' + c.innerText.replace(/"/g, '""') + '"').join(',')); download(name + '.csv', '﻿' + lines.join('\r\n'), 'text/csv'); }
+  function rangePage(el, key, title, sub, body) {
+    const ym = U.today().slice(0, 7); const st = PAGES[key] = PAGES[key] || { from: ym + '-01', to: monthEnd(ym) };
+    el.innerHTML = head(title, sub, `<button class="btn" id="px">${ic('dl')} Xuất Excel</button>`) + `
+      <div class="card" style="margin-bottom:16px"><div class="toolbar"><span class="daterange">${ic('clock')}<input type="date" class="input sm" id="f1" value="${st.from}"> – <input type="date" class="input sm" id="f2" value="${st.to}"></span>
+      <div class="seg">${[['m', 'Tháng này'], ['pm', 'Tháng trước'], ['q', 'Quý này'], ['y', 'Năm nay']].map(([k, l]) => `<button data-q="${k}">${l}</button>`).join('')}</div></div></div><div id="rb"></div>`;
+    const draw = () => { $('#rb', el).innerHTML = body(st, draw); };
+    $('#f1', el).onchange = e => { st.from = e.target.value; draw(); }; $('#f2', el).onchange = e => { st.to = e.target.value; draw(); };
+    $$('[data-q]', el).forEach(b => b.onclick = () => { const r = periodRange(b.dataset.q); st.from = r.from; st.to = r.to; $('#f1', el).value = st.from; $('#f2', el).value = st.to; draw(); });
+    $('#px', el).onclick = () => { const ts = $$('#rb table', el); exportTable(ts[ts.length - 1], key.replace('_', '') + '_' + st.from + '_' + st.to); };
+    draw();
+  }
   const PAGES = {
     dashboard(el) {
       const per = PAGES._per || 'm'; const R = periodRange(per);
@@ -746,7 +900,7 @@
       const fin = months.map(m => Store.finance({ from: m + '-01', to: monthEnd(m) }));
       const routes = Store.all('route'); const running = routes.filter(r => r.status === 'Đang chạy').length;
       const trips = routes.filter(r => r.pickup_date >= R.from && r.pickup_date <= R.to && r.status !== 'Hủy').length;
-      const pend = Store.all('cost_request').filter(r => r.status === 'Chờ duyệt');
+      const pend = Store.all('cost_request').filter(r => r.status === 'Chờ duyệt' || r.status === 'Kế toán đã duyệt');
       const pendRev = Store.all('revenue').filter(r => r.status === 'Chờ xác nhận');
       const vehs = Store.all('vehicle');
       const byV = vehs.map(v => ({ v, ...Store.finance({ from: R.from, to: R.to, vehicle: v.id }) })).sort((a, b) => b.profit - a.profit);
@@ -871,6 +1025,85 @@
         ${list.map(x => `<tr onclick="location.hash='${x.href}'"><td>${esc(x.what)}</td><td class="code">${esc(x.who)}</td><td>${U.date(x.d)}</td><td>${x.days < 0 ? chip('Đã hết hạn ' + (-x.days) + ' ngày', 'bad') : x.days <= 30 ? chip('Còn ' + x.days + ' ngày', 'warn') : chip('Còn ' + x.days + ' ngày', 'ok')}</td></tr>`).join('') || '<tr><td colspan="4"><div class="empty">Chưa nhập hạn giấy tờ</div></td></tr>'}</tbody></table></div>`;
     },
 
+    // Lãi lỗ theo chuyến: doanh thu gắn chuyến/đơn của chuyến − chi phí biến đổi của chuyến (không gồm chi phí cố định theo xe)
+    rptTrip(el) {
+      rangePage(el, '_rt', 'Lãi lỗ theo chuyến', 'Doanh thu đã xác nhận gắn với chuyến (hoặc đơn hàng của chuyến) − nhiên liệu − đề nghị chi phí đã duyệt của chuyến. Chưa gồm chi phí cố định theo xe.', st => {
+        const revs = Store.all('revenue').filter(r => r.status === 'Đã xác nhận');
+        const fuels = Store.all('route_fuel'); const reqs = Store.all('cost_request').filter(x => APPROVED.includes(x.status));
+        const rows = Store.all('route').filter(r => r.status !== 'Hủy' && (r.pickup_date || '') >= st.from && (r.pickup_date || '') <= st.to).map(rt => {
+          const ids = new Set(rt.order_ids || []);
+          const rev = revs.filter(x => x.route_id === rt.id || (!x.route_id && x.order_id && ids.has(x.order_id))).reduce((s, x) => s + U.num(x.amount), 0);
+          const fuel = fuels.filter(x => x.route_id === rt.id).reduce((s, x) => s + U.num(x.total), 0);
+          const cost = reqs.filter(x => x.route_id === rt.id).reduce((s, x) => s + U.num(x.amount), 0);
+          return { rt, rev, fuel, cost, profit: rev - fuel - cost };
+        }).sort((a, b) => String(b.rt.pickup_date).localeCompare(String(a.rt.pickup_date)));
+        const T = k => rows.reduce((s, r) => s + r[k], 0); const loss = rows.filter(r => r.profit < 0).length;
+        return `<div class="mini-kpis" style="margin-bottom:14px"><div><small>Số chuyến</small><b>${rows.length}</b></div><div><small>Lợi nhuận chuyến</small><b class="${T('profit') >= 0 ? 'pos' : 'neg'}">${short(T('profit'))}</b></div><div><small>Chuyến lỗ</small><b class="${loss ? 'neg' : ''}">${loss}</b></div></div>
+        <div class="card" style="overflow:auto"><table class="grid"><thead><tr><th class="nosort">Mã chuyến</th><th class="nosort">Ngày</th><th class="nosort">Xe</th><th class="nosort">Tài xế</th><th class="nosort">Tuyến</th><th class="num nosort">Km</th><th class="num nosort">Doanh thu</th><th class="num nosort">Nhiên liệu</th><th class="num nosort">Chi phí chuyến</th><th class="num nosort">Lãi / lỗ</th><th class="num nosort">Biên</th></tr></thead><tbody>
+        ${rows.map(r => `<tr onclick="location.hash='#/m/route?id=${r.rt.id}'"><td class="code">${esc(r.rt.code)}</td><td>${U.date(r.rt.pickup_date)}</td><td>${esc(Store.label('vehicle', r.rt.vehicle_id, 'plate'))}</td><td>${esc(Store.label('driver', r.rt.driver_id))}</td><td>${esc([Store.label('location', r.rt.from_location), Store.label('location', r.rt.to_location)].filter(Boolean).join(' → '))}</td><td class="num">${U.money(r.rt.km_actual)}</td><td class="num">${U.money(r.rev)}</td><td class="num">${U.money(r.fuel)}</td><td class="num">${U.money(r.cost)}</td><td class="num ${r.profit >= 0 ? 'pos' : 'neg'}"><b>${U.money(r.profit)}</b></td><td class="num">${pct(r.profit, r.rev)}</td></tr>`).join('') || '<tr><td colspan="11"><div class="empty">Không có chuyến trong khoảng ngày</div></td></tr>'}</tbody>
+        <tfoot><tr><td>Tổng</td><td></td><td></td><td></td><td></td><td class="num">${U.money(rows.reduce((s, r) => s + U.num(r.rt.km_actual), 0))}</td><td class="num">${U.money(T('rev'))}</td><td class="num">${U.money(T('fuel'))}</td><td class="num">${U.money(T('cost'))}</td><td class="num">${U.money(T('profit'))}</td><td class="num">${pct(T('profit'), T('rev'))}</td></tr></tfoot></table></div>`;
+      });
+    },
+
+    // Dầu: định mức (km chuyến hoàn thành × lít/100km) so với lít thực đổ
+    rptFuel(el) {
+      rangePage(el, '_rf', 'Dầu: định mức và thực tế', 'Định mức = km thực tế các chuyến hoàn thành × định mức của xe (hoặc Định mức dầu theo chủng loại; chuyến rỗng dùng mức không hàng). Thực tế = số lít đổ trong khoảng ngày. Vượt quá 5% được cảnh báo.', st => {
+        const rows = Store.all('vehicle').map(v => {
+          const q = Store.all('fuel_quota').find(x => x.vehicle_group === v.group_id) || {};
+          const loaded = U.num(v.fuel_norm) || U.num(q.loaded); const empty = U.num(q.empty) || loaded;
+          const rts = Store.all('route').filter(r => r.vehicle_id === v.id && r.status === 'Hoàn thành' && (r.pickup_date || '') >= st.from && (r.pickup_date || '') <= st.to);
+          const km = rts.reduce((s, r) => s + U.num(r.km_actual), 0);
+          const norm = Math.round(rts.reduce((s, r) => s + U.num(r.km_actual) * (r.type === 'Chuyến rỗng' ? empty : loaded) / 100, 0));
+          const fu = Store.all('route_fuel').filter(r => r.vehicle_id === v.id && (r.date || '') >= st.from && (r.date || '') <= st.to);
+          const lit = fu.reduce((s, r) => s + U.num(r.liters), 0); const money = fu.reduce((s, r) => s + U.num(r.total), 0);
+          const diff = lit - norm; const rate = norm ? diff / norm : 0; const price = lit ? money / lit : U.num(Store.settings().fuel_price);
+          return { v, loaded, km, norm, lit, diff, rate, value: Math.round(diff * price) };
+        });
+        const flag = r => !r.loaded ? chip('Chưa có định mức', 'warn') : !r.norm ? chip('Không có chuyến', '') : r.rate > 0.05 ? chip('Vượt ' + pct(r.diff, r.norm), 'bad') : r.rate < -0.05 ? chip('Thấp hơn ' + pct(-r.diff, r.norm), 'info') : chip('Đạt', 'ok');
+        return `<div class="card" style="overflow:auto"><table class="grid"><thead><tr><th class="nosort">Biển số</th><th class="num nosort">Định mức (l/100km)</th><th class="num nosort">Km chạy</th><th class="num nosort">Lít định mức</th><th class="num nosort">Lít thực tế</th><th class="num nosort">Chênh lệch (lít)</th><th class="num nosort">Giá trị chênh lệch</th><th class="nosort">Đánh giá</th></tr></thead><tbody>
+        ${rows.map(r => `<tr onclick="location.hash='#/p/rpt_vehicle/${r.v.id}'"><td class="code">${esc(r.v.plate)}</td><td class="num">${r.loaded || '—'}</td><td class="num">${U.money(r.km)}</td><td class="num">${U.money(r.norm)}</td><td class="num">${U.money(r.lit)}</td><td class="num ${r.diff > 0 ? 'neg' : ''}">${r.diff > 0 ? '+' : ''}${U.money(r.diff)}</td><td class="num ${r.value > 0 ? 'neg' : ''}">${U.money(r.value)}</td><td>${flag(r)}</td></tr>`).join('')}</tbody></table></div>`;
+      });
+    },
+
+    // Công nợ khách hàng: doanh thu công nợ đã xác nhận (sau VAT) − phiếu thu; tuổi nợ theo hạn công nợ của khách (thu tiền trừ dần khoản cũ nhất)
+    rptDebt(el) {
+      const today = U.today(); const dd = (a, b) => Math.round((new Date(a) - new Date(b)) / 864e5);
+      const B = [['Trong hạn', x => x <= 0], ['Quá hạn 1–30', x => x > 0 && x <= 30], ['31–60', x => x > 30 && x <= 60], ['61–90', x => x > 60 && x <= 90], ['> 90 ngày', x => x > 90]];
+      const rows = Store.all('customer').map(c => {
+        const days = U.num(c.debt_days) || 30;
+        const items = Store.all('revenue').filter(r => r.customer_id === c.id && r.status === 'Đã xác nhận' && r.collect === 'Công nợ')
+          .map(r => ({ date: r.date, amt: U.num(r.total) || (U.num(r.amount) + Math.round(U.num(r.amount) * TMG_vatRate(r.vat))) })).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+        const owed = items.reduce((s, x) => s + x.amt, 0);
+        const paid = Store.all('receipt_voucher').filter(r => r.customer_id === c.id).reduce((s, r) => s + U.num(r.amount), 0);
+        let left = paid; const age = B.map(() => 0);
+        items.forEach(x => { const use = Math.min(left, x.amt); left -= use; const rest = x.amt - use; if (rest <= 0) return; const over = dd(today, x.date) - days; age[B.findIndex(b => b[1](over))] += rest; });
+        return { c, days, owed, paid, debt: owed - paid, age };
+      }).filter(r => r.owed || r.paid).sort((a, b) => b.debt - a.debt);
+      const T = k => rows.reduce((s, r) => s + r[k], 0); const TA = i => rows.reduce((s, r) => s + r.age[i], 0);
+      const overdue = rows.reduce((s, r) => s + r.age.slice(1).reduce((a, b) => a + b, 0), 0);
+      el.innerHTML = head('Công nợ khách hàng', `Tính đến ${U.date(today)}. Phát sinh = doanh thu hình thức "Công nợ" đã xác nhận (sau VAT). Phiếu thu trừ vào khoản phát sinh cũ nhất trước.`, `<button class="btn" id="px">${ic('dl')} Xuất Excel</button>`) + `
+        <div class="mini-kpis" style="margin-bottom:14px"><div><small>Tổng còn phải thu</small><b>${short(T('debt'))}</b></div><div><small>Đã quá hạn</small><b class="${overdue ? 'neg' : ''}">${short(overdue)}</b></div><div><small>Đã thu</small><b>${short(T('paid'))}</b></div></div>
+        <div class="card" style="overflow:auto" id="rb"><table class="grid"><thead><tr><th class="nosort">Khách hàng</th><th class="num nosort">Hạn (ngày)</th><th class="num nosort">Phát sinh</th><th class="num nosort">Đã thu</th><th class="num nosort">Còn nợ</th>${B.map(b => `<th class="num nosort">${b[0]}</th>`).join('')}</tr></thead><tbody>
+        ${rows.map(r => `<tr onclick="location.hash='#/m/customer?id=${r.c.id}'"><td>${esc(r.c.name)}</td><td class="num">${r.days}</td><td class="num">${U.money(r.owed)}</td><td class="num">${U.money(r.paid)}</td><td class="num"><b>${U.money(r.debt)}</b></td>${r.age.map((a, i) => `<td class="num ${i && a ? 'neg' : ''}">${a ? U.money(a) : ''}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${5 + B.length}"><div class="empty">Không có công nợ</div></td></tr>`}</tbody>
+        <tfoot><tr><td>Tổng</td><td></td><td class="num">${U.money(T('owed'))}</td><td class="num">${U.money(T('paid'))}</td><td class="num">${U.money(T('debt'))}</td>${B.map((b, i) => `<td class="num">${U.money(TA(i))}</td>`).join('')}</tr></tfoot></table></div>`;
+      $('#px', el).onclick = () => exportTable($('#rb table', el), 'cong_no_khach_hang_' + today);
+    },
+
+    // Quyết toán tạm ứng tài xế theo chuyến
+    rptSettle(el) {
+      rangePage(el, '_rs', 'Quyết toán tạm ứng tài xế', 'Theo từng chuyến hoàn thành: tạm ứng chuyến − chi phí tài xế đã ứng (đề nghị đã duyệt, chưa chi) − dầu tài xế tự trả. Số dương: tài xế hoàn lại; số âm: công ty trả thêm.', (st, redraw) => {
+        const rows = Store.all('route').filter(r => r.status === 'Hoàn thành' && (r.pickup_date || '') >= st.from && (r.pickup_date || '') <= st.to)
+          .map(rt => ({ rt, s: rt.settle === 'Đã quyết toán' ? null : settlement(rt) })).sort((a, b) => String(b.rt.pickup_date).localeCompare(String(a.rt.pickup_date)));
+        const open = rows.filter(r => r.s);
+        const byDrv = Object.entries(open.reduce((a, r) => { const k = r.rt.driver_id || ''; a[k] = (a[k] || 0) + r.s.balance; return a; }, {})).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+        setTimeout(() => $$('[data-settle]', el).forEach(b => b.onclick = e => { e.stopPropagation(); ROW_ACTIONS.settleRoute.run(Store.get('route', b.dataset.settle), redraw); }));
+        return `<div class="grid2" style="margin-bottom:14px"><div class="card"><div class="card-h"><h3>Theo tài xế (chưa quyết toán)</h3></div><div class="card-b"><div class="dl">${byDrv.map(([d, v]) => `<div>${esc(Store.label('driver', d) || '—')}</div><div class="num ${v < 0 ? 'neg' : ''}">${v >= 0 ? 'Hoàn lại ' + U.money(v) : 'Công ty trả ' + U.money(-v)} đ</div>`).join('') || '<div class="muted">Không còn chuyến chưa quyết toán</div>'}</div></div></div>
+          <div class="card"><div class="card-b"><div class="mini-kpis"><div><small>Chuyến chưa quyết toán</small><b>${open.length}</b></div><div><small>Đã quyết toán</small><b>${rows.length - open.length}</b></div></div></div></div></div>
+          <div class="card" style="overflow:auto"><table class="grid"><thead><tr><th class="nosort">Mã chuyến</th><th class="nosort">Ngày</th><th class="nosort">Tài xế</th><th class="nosort">Xe</th><th class="num nosort">Tạm ứng</th><th class="num nosort">Tài xế đã chi</th><th class="num nosort">Kết quả</th><th class="nosort">Trạng thái</th><th class="nosort"></th></tr></thead><tbody>
+          ${rows.map(r => { const v = r.s ? r.s.balance : U.num(r.rt.settle_amount); return `<tr onclick="location.hash='#/m/route?id=${r.rt.id}'"><td class="code">${esc(r.rt.code)}</td><td>${U.date(r.rt.pickup_date)}</td><td>${esc(Store.label('driver', r.rt.driver_id))}</td><td>${esc(Store.label('vehicle', r.rt.vehicle_id, 'plate'))}</td><td class="num">${U.money(r.s ? r.s.advance : r.rt.advance)}</td><td class="num">${r.s ? U.money(r.s.spent) : ''}</td><td class="num ${v < 0 ? 'neg' : ''}">${v >= 0 ? 'Hoàn lại ' : 'Trả thêm '}${U.money(Math.abs(v))}</td><td>${chip(r.s ? 'Chưa quyết toán' : 'Đã quyết toán')}${r.s && r.s.pending.length ? ' ' + chip(r.s.pending.length + ' chờ duyệt', 'warn') : ''}</td><td>${r.s ? `<button class="btn sm ok" data-settle="${r.rt.id}">Quyết toán</button>` : ''}</td></tr>`; }).join('') || '<tr><td colspan="9"><div class="empty">Không có chuyến hoàn thành trong khoảng ngày</div></td></tr>'}</tbody></table></div>`;
+      });
+    },
+
     settings(el) {
       const s = Store.settings();
       el.innerHTML = head('Thiết lập công ty') + `<form class="card" id="sf" style="max-width:760px"><div class="card-b"><div class="form-grid">
@@ -977,7 +1210,7 @@
       $('#uf', layer).onsubmit = e => { e.preventDefault(); const f = new FormData(e.target); close(); act(() => C.users.create(f.get('e'), f.get('p'), f.get('n'), f.get('r')), 'Đã tạo tài khoản ' + f.get('e')); };
     });
   };
-  PAGES.rpt_vehicle = PAGES.rptVehicle; PAGES.rpt_month = PAGES.rptMonth; PAGES.rpt_cat = PAGES.rptCat; PAGES.rpt_expiry = PAGES.rptExpiry;
+  PAGES.rpt_vehicle = PAGES.rptVehicle; PAGES.rpt_month = PAGES.rptMonth; PAGES.rpt_cat = PAGES.rptCat; PAGES.rpt_expiry = PAGES.rptExpiry; PAGES.rpt_trip = PAGES.rptTrip; PAGES.rpt_fuel = PAGES.rptFuel; PAGES.rpt_debt = PAGES.rptDebt; PAGES.rpt_settle = PAGES.rptSettle;
 
   // Tab khác (VD: App tài xế) vừa ghi dữ liệu -> vẽ lại nếu người dùng không đang thao tác
   Store.onChange = () => {

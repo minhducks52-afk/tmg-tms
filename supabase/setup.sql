@@ -107,8 +107,19 @@ begin
   new.updated_at := now();
   if r is null then raise exception 'Tài khoản chưa được cấp quyền'; end if;
   if tg_op = 'UPDATE' then s_old := old.data->>'status'; end if;
-  if new.col = 'cost_request' and s_new in ('Đã duyệt', 'Từ chối', 'Đã chi') and s_new is distinct from s_old and r not in ('admin', 'accountant') then
+  -- Duyệt chi 2 cấp: Kế toán duyệt -> Quản trị viên xác nhận ("Đã duyệt") -> chi ("Đã chi")
+  if new.col = 'cost_request' and s_new in ('Kế toán đã duyệt', 'Đã duyệt', 'Từ chối', 'Đã chi') and s_new is distinct from s_old and r not in ('admin', 'accountant') then
     raise exception 'Không có quyền duyệt chi phí';
+  end if;
+  if new.col = 'cost_request' and s_new = 'Đã duyệt' and s_new is distinct from s_old and r <> 'admin' then
+    raise exception 'Chỉ Quản trị viên được xác nhận duyệt chi';
+  end if;
+  if new.col = 'cost_request' and s_new = 'Đã chi' and s_new is distinct from s_old and r <> 'admin' and coalesce(s_old, '') <> 'Đã duyệt' then
+    raise exception 'Đề nghị phải được Quản trị viên xác nhận trước khi chi';
+  end if;
+  if new.col = 'route' and new.data->>'settle' = 'Đã quyết toán' and r not in ('admin', 'accountant')
+     and (tg_op = 'INSERT' or (old.data->>'settle') is distinct from 'Đã quyết toán') then
+    raise exception 'Chỉ Kế toán / Quản trị viên được quyết toán chuyến';
   end if;
   if new.col = 'revenue' and s_new in ('Đã xác nhận', 'Từ chối') and s_new is distinct from s_old and r = 'driver' then
     raise exception 'Tài xế không được tự xác nhận doanh thu';
