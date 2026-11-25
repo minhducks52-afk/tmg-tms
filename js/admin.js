@@ -108,7 +108,7 @@
     else if (kind === 'p' && PAGES[key]) PAGES[key](el, arg);
     else { location.hash = '#/p/dashboard'; return; }
     markNav(key); refreshBell();
-    const h1 = $('.page-head h1', el); document.title = (h1 ? h1.textContent + ' · ' : '') + 'TMG TMS';
+    const h1 = $('.page-head h1', el); document.title = (h1 ? h1.textContent + ' · ' : '') + 'TMG Logistics';
   }
   window.addEventListener('hashchange', () => Store.ready().then(route));
   const menuEntry = key => { for (const g of MENU) { if (g.id === key) return { g, title: g.title }; for (const it of g.items || []) { const id = typeof it === 'string' ? it : it.id; if (id === key) return { g, title: typeof it === 'string' ? M[it].title : it.title }; } } return null; };
@@ -125,8 +125,8 @@
     $('#app').innerHTML = `
     <div class="login">
       <div class="login-hero">
-        <div class="brand-mark"><span class="logo" style="background:#fff;color:var(--brand)">${ic('truck')}</span><span>TMG TMS</span></div>
-        <div><h2>Quản lý vận tải<br>theo từng đầu xe</h2><p>${esc(set.company || 'TMG Logistics')}</p>
+        <div class="brand-mark"><span class="logo" style="background:#fff;color:var(--brand)">${ic('truck')}</span><span>TMG Logistics</span></div>
+        <div><h2>Quản lý vận tải<br>theo từng đầu xe</h2>${set.company && set.company !== 'TMG Logistics' ? `<p>${esc(set.company)}</p>` : ''}
           <ul><li><span>${ic('truck')}</span>Đơn hàng, chuyến xe, điều vận</li><li><span>${ic('receipt')}</span>Doanh thu, đề nghị &amp; duyệt chi phí</li><li><span>${ic('chart')}</span>Lãi lỗ theo đầu xe, theo tháng</li><li><span>${ic('phone')}</span>App tài xế trên điện thoại</li></ul></div>
         <a href="driver.html">${ic('phone')} Mở App tài xế →</a>
       </div>
@@ -176,8 +176,8 @@
     $('#app').innerHTML = `
     <div class="login">
       <div class="login-hero">
-        <div class="brand-mark"><span class="logo" style="background:#fff;color:var(--brand)">${ic('truck')}</span><span>TMG TMS</span></div>
-        <div><h2>Quản lý vận tải<br>theo từng đầu xe</h2><p>${esc(set.company || 'TMG Logistics')}</p>
+        <div class="brand-mark"><span class="logo" style="background:#fff;color:var(--brand)">${ic('truck')}</span><span>TMG Logistics</span></div>
+        <div><h2>Quản lý vận tải<br>theo từng đầu xe</h2>${set.company && set.company !== 'TMG Logistics' ? `<p>${esc(set.company)}</p>` : ''}
           <ul><li><span>${ic('truck')}</span>Đơn hàng, chuyến xe, điều vận</li><li><span>${ic('receipt')}</span>Doanh thu, đề nghị &amp; duyệt chi phí</li><li><span>${ic('chart')}</span>Lãi lỗ theo đầu xe, theo tháng</li><li><span>${ic('phone')}</span>App tài xế trên điện thoại</li></ul></div>
         <a href="driver.html">${ic('phone')} Mở App tài xế →</a>
       </div>
@@ -210,7 +210,7 @@
     $('#app').innerHTML = `
     <div class="app ${prefs.get('rail', false) ? 'rail' : ''}">
       <aside class="side">
-        <div class="side-head"><a class="brand-mark" href="#/p/dashboard" style="color:var(--ink);text-decoration:none"><span class="logo">${ic('truck')}</span><span class="t">TMG TMS</span></a></div>
+        <div class="side-head"><a class="brand-mark" href="#/p/dashboard" style="color:var(--ink);text-decoration:none"><span class="logo">${ic('truck')}</span><span class="t">TMG Logistics</span></a></div>
         <nav>${nav}</nav>
         <div class="side-foot"><a class="nav-item" href="driver.html" target="_blank" title="App tài xế">${ic('phone')}<span class="t">App tài xế</span>${ic('ext', 'class="i t" style="width:14px;margin-left:auto"')}</a>
           <button class="nav-item" id="railBtn" title="Thu gọn / mở rộng menu">${ic('panel')}<span class="t">Thu gọn menu</span></button></div>
