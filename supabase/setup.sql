@@ -45,9 +45,15 @@ create or replace function public.tmg_my_vehicles() returns text[] language sql 
   ) s
 $$;
 
+create or replace function public.tmg_driver_name() returns text language sql stable security definer set search_path = public as
+$$ select data->>'name' from public.tmg_records where col = 'driver' and id = public.tmg_driver() $$;
+
 create or replace function public.tmg_driver_can_read(p_col text, p_id text, p_data jsonb) returns boolean language sql stable security definer set search_path = public as $$
   select case
     when p_col in ('vehicle_group', 'location', 'cost_category', 'customer', 'goods_type', '_settings') then true
+    -- chứng từ / nhật ký do chính tài xế tạo (cần để ghi kiểu upsert)
+    when p_col = 'document' then (p_data->>'created_by') = public.tmg_driver_name()
+    when p_col = 'activity_log' then (p_data->>'user') = public.tmg_driver_name()
     when p_col = 'vehicle' then p_id = any(public.tmg_my_vehicles())
     when p_col = 'driver' then p_id = public.tmg_driver()
     when p_col in ('route', 'order', 'revenue', 'cost_request', 'route_fuel', 'incident', 'op_cost', 'repair_ticket') then (p_data->>'vehicle_id') = any(public.tmg_my_vehicles())
@@ -64,6 +70,11 @@ create or replace function public.tmg_driver_can_write(p_col text, p_id text, p_
     when p_col in ('document', 'activity_log') then true
     else false end
 $$;
+
+-- ---------- Quyền truy cập bảng (project mới không tự cấp) ----------
+revoke all on public.tmg_records, public.tmg_profiles, public.tmg_seq from anon;
+grant select, insert, update, delete on public.tmg_records to authenticated;
+grant select on public.tmg_profiles to authenticated;
 
 -- ---------- Phân quyền dòng (RLS) ----------
 alter table public.tmg_records enable row level security;

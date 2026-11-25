@@ -14,7 +14,10 @@
   const CLOUD_CFG = global.TMG_CLOUD || null;
   const CLOUD_ON = !!(CLOUD_CFG && CLOUD_CFG.url && CLOUD_CFG.anonKey && !NS && qs.get('local') !== '1');
   const LOCAL_P = 'tmg_tms_v2' + SUF + ':';   // dữ liệu chạy trên máy
-  const P = CLOUD_ON ? 'tmg_tms_cloud:' : LOCAL_P;  // bản sao (cache) dữ liệu máy chủ
+  // App tài xế có phiên đăng nhập + bản sao riêng => mở song song với trang quản trị trên cùng trình duyệt được
+  const IS_DRIVER_APP = global.TMG_APP === 'driver';
+  const AUTH_KEY = IS_DRIVER_APP ? 'tmg_drv_auth' : 'tmg_tms_auth';
+  const P = CLOUD_ON ? (IS_DRIVER_APP ? 'tmg_drv_cloud:' : 'tmg_tms_cloud:') : LOCAL_P;  // bản sao (cache) dữ liệu máy chủ
   const CP = P + 'c:';
   const MKEY = P + 'meta';
   const OKEY = P + 'outbox';
@@ -199,7 +202,7 @@
       if (error) throw new Error(/invalid/i.test(error.message) ? 'Sai tài khoản hoặc mật khẩu' : error.message);
       await Cloud.afterLogin(data.user, false);
     },
-    signOut() { try { Object.keys(localStorage).filter(k => k.startsWith('tmg_tms_auth')).forEach(k => localStorage.removeItem(k)); } catch (e) { } if (Cloud.client) Cloud.client.auth.signOut().catch(() => { }); Cloud.user = Cloud.profile = null; Cloud.emit(); },
+    signOut() { try { Object.keys(localStorage).filter(k => k.startsWith(AUTH_KEY)).forEach(k => localStorage.removeItem(k)); } catch (e) { } if (Cloud.client) Cloud.client.auth.signOut().catch(() => { }); Cloud.user = Cloud.profile = null; Cloud.emit(); },
     async afterLogin(user, background) {
       const st = await Cloud.status();
       if (!st || !st.role) { Cloud.signOut(); throw new Error('Tài khoản chưa được cấp quyền sử dụng hệ thống'); }
@@ -333,7 +336,7 @@
     mem = { meta: readJSON(MKEY, null) || { __v: SCHEMA_VERSION, __seq: {}, settings: {} }, cols: {} };
     if (!readJSON(MKEY, null)) writeJSON(MKEY, mem.meta);
     if (!global.supabase || !global.supabase.createClient) { Cloud.error = 'Không tải được thư viện kết nối máy chủ (kiểm tra mạng)'; return; }
-    Cloud.client = global.supabase.createClient(CLOUD_CFG.url, CLOUD_CFG.anonKey, { auth: { persistSession: true, autoRefreshToken: true, storageKey: 'tmg_tms_auth' } });
+    Cloud.client = global.supabase.createClient(CLOUD_CFG.url, CLOUD_CFG.anonKey, { auth: { persistSession: true, autoRefreshToken: true, storageKey: AUTH_KEY } });
     global.addEventListener('online', () => Cloud.sync());
     global.addEventListener('offline', () => Cloud.emit());
     setInterval(() => { if (Cloud.user) Cloud.sync(); }, 60000);
