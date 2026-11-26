@@ -474,6 +474,25 @@
       Object.assign(r, { _deleted: U.stamp(), _deleted_by: user || Store.userName() });
       persist(c, [r]); log('Xoá', c, r, user);
     },
+    // Lấy liền n mã cho nhập hàng loạt (trên máy chủ: giữ chỗ 1 dải riêng => không trùng giữa các máy)
+    async codes(c, prefix, n) {
+      if (!n) return [];
+      if (CLOUD_ON) { const res = await Cloud.rpc('tmg_reserve_many', { p_cols: [c], p_n: n }); const s = Number(res[c]); return Array.from({ length: n }, (_, i) => prefix + U.pad(s + i)); }
+      return Array.from({ length: n }, () => Store.nextCode(c, prefix));
+    },
+    // Ghi / xoá mềm hàng loạt (nhập file): ghi 1 lần cho cả bảng, 1 dòng nhật ký
+    insertMany(c, recs, user, note) {
+      if (!recs.length) return [];
+      const by = user || Store.userName(), at = U.stamp();
+      const out = recs.map(rec => Object.assign({ id: U.uid() }, rec, { created_at: at, created_by: by, updated_at: '', updated_by: '' }));
+      persist(c, out); log(note || 'Nhập file', c, { code: out.length + ' bản ghi' }, user); return out;
+    },
+    removeMany(c, ids, user, note) {
+      refresh(c); const set = new Set(ids), at = U.stamp(), by = user || Store.userName();
+      const rs = col(c).filter(r => set.has(r.id) && !r._deleted); if (!rs.length) return 0;
+      rs.forEach(r => Object.assign(r, { _deleted: at, _deleted_by: by }));
+      persist(c, rs); log(note || 'Xoá hàng loạt', c, { code: rs.length + ' bản ghi' }, user); return rs.length;
+    },
     restore(c, id, user) {
       refresh(c);
       const r = col(c).find(x => x.id === id); if (!r) return;

@@ -46,6 +46,15 @@ Không cần cài đặt, không cần máy chủ: HTML/CSS/JavaScript thuần, 
 - **Chi phí vận hành kỳ Quý / Năm** được chia đều 3 / 12 tháng.
 - **Cảnh báo trùng doanh thu** (cùng đơn hàng, hoặc cùng xe + ngày + số tiền).
 
+## Nhập bảng tổng hợp tháng (Excel)
+Menu *Doanh thu & Chi phí → Nhập bảng tổng hợp tháng (Excel)* (chỉ Quản trị viên). Đọc file .xlsx dạng "BẢNG TỔNG HỢP THÁNG" (mỗi sheet một tháng), đọc ngay trên trình duyệt, không gửi file đi đâu.
+- Mỗi dòng container → **Đơn hàng** (Hoàn thành, kèm booking, loại cont, xuất/nhập/rỗng, phí nâng/hạ, số HĐ) + **Doanh thu cước** (tách VAT từ cột "CƯỚC gồm VAT").
+- Phí nâng/hạ (LOLO) → **Thu chi hộ** + **Chi phí chi hộ** bằng nhau: không đổi lãi, nhưng vào công nợ khách (khớp cột "Tổng tiền cước + chi hộ").
+- Các khoản (1)…(9) cuối bảng → **Chi phí vận hành** của tháng, phân bổ cho các xe theo số chuyến.
+- Trước khi nhập: đối chiếu tổng đọc được với dòng TOTAL, cảnh báo dòng thiếu xe / ngày lệch tháng (tự sửa ngày gõ kiểu tháng/ngày).
+- Nhập lại cùng file không tạo trùng; *Gỡ đợt nhập* chuyển cả tháng vào Thùng rác.
+- Lãi trong TMG tính trên cước **trước VAT** nên thấp hơn số "lãi" trong file gốc (tính trên cước gồm VAT).
+
 ## Cách tính lãi lỗ theo đầu xe
 - **Doanh thu** = phiếu *Nhập doanh thu* ở trạng thái *Đã xác nhận*
 - **Chi phí** = Nhiên liệu + Đề nghị chi phí *Đã duyệt/Đã chi* + Phiếu sửa chữa *đã phê duyệt* + Chi phí vận hành (đã phân bổ theo kỳ)

@@ -289,6 +289,77 @@
       ok(!A.errors.length, A.errors.join('\n'));
     });
 
+    await t('Nhập bảng tổng hợp tháng (Excel): đọc đúng, khớp TOTAL, ghi vào TMG, nhập lại không trùng, gỡ được', async () => {
+      // Tạo file .xlsx mẫu (sheet nén deflate, có sharedStrings + inlineStr) giống mẫu "BẢNG TỔNG HỢP THÁNG"
+      const cell = (r, k, v) => typeof v === 'number' ? `<c r="${k}${r}"><v>${v}</v></c>` : v && v.s != null ? `<c r="${k}${r}" t="s"><v>${v.s}</v></c>` : `<c r="${k}${r}" t="inlineStr"><is><t>${v}</t></is></c>`;
+      const rows = [[3, { D: 'BẢNG TỔNG HỢP THÁNG 10' }],
+        [4, { A: 'Số', B: { s: 0 }, C: 'Booking', D: 'Số xe', E: 'Ngày vận chuyển', F: 'CONT', H: 'CẢNG NÂNG (Pick up)', I: 'Địa điểm đóng hàng', J: 'Cảng Hạ (Drop-off)', K: 'Phí N/H (LOLO) Đã bao gồm VAT', M: 'CƯỢC', N: 'CƯỚC (gồm VAT)', O: 'HD SỐ', P: 'Tổng tiền cước +chi hộ ', Q: 'XUẤT/ NHẬP/ RỖNG', R: 'Khách' }],
+        [5, { K: ' NÂNG', L: 'HẠ' }], [6, { F: 20, G: 40 }],
+        [7, { A: 1, B: 'TSTU1000001', C: 'BK1', D: '99Z-999.01', E: 46301, G: 1, H: 'CẢNG ĐỒNG NAI', I: 'NHÀ MÁY THỬ', J: 'CÁT LÁI', K: 1788000, L: 1064000, N: 4387500, O: 33, P: 10479500, Q: 'XUẤT', R: 'Khách Thử A' }],
+        [8, { A: 2, B: 'TSTU1000002', D: '99Z-999.02', E: '07/10/2026', F: 1, H: 'Cát Lái', I: 'TRẢ RỖNG', J: 'cát lái', L: 1000000, N: 3240000, Q: 'RỖNG', S: '+NEO 1.500.000' }],
+        [9, { A: 3, B: 'TSTU 1000003', D: '99Z-999.01', E: 46330, G: 1, H: 'ICD THỬ', J: 'CÁT LÁI', N: 5400000, O: 34, P: 5400000, Q: 'NHẬP', R: 'Khách Thử B' }],
+        [10, { A: 'TOTAL', K: 3852000, N: 13027500, P: 19731500 }],
+        [11, { A: '(1) LƯƠNG CẢ 2 TÀI XẾ THÁNG 10', N: 10000001 }], [12, { A: '(4) SĂM LỐP, VÁ VỎ', N: 0 }], [13, { A: '(8) PHÍ KẾ TOÁN DỊCH VỤ THÁNG', N: ' 1,500,000 ', P: 'CẦN XỬ LÝ SỚM' }],
+        [14, { A: 'TOTAL - (1) - (4) - (8)', N: 999 }]];
+      const sheetXml = `<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${rows.map(([r, cs]) => `<row r="${r}">${Object.entries(cs).map(([k, v]) => cell(r, k, v)).join('')}</row>`).join('')}</sheetData></worksheet>`;
+      const files = {
+        'xl/workbook.xml': '<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="THÁNG 10" sheetId="1" r:id="rId4"/></sheets></workbook>',
+        'xl/_rels/workbook.xml.rels': '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId4" Type="worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
+        'xl/sharedStrings.xml': '<?xml version="1.0"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><r><t>Số </t></r><r><t>Container</t></r></si></sst>',
+        'xl/worksheets/sheet1.xml': sheetXml
+      };
+      const enc = new TextEncoder(), parts = [], cd = []; let off = 0;
+      for (const [name, s] of Object.entries(files)) {
+        const nb = enc.encode(name), raw = enc.encode(s), deflate = name.includes('sheet1');
+        const db = deflate ? new Uint8Array(await new Response(new Blob([raw]).stream().pipeThrough(new CompressionStream('deflate-raw'))).arrayBuffer()) : raw;
+        const h = new DataView(new ArrayBuffer(30)); h.setUint32(0, 0x04034b50, true); h.setUint16(8, deflate ? 8 : 0, true); h.setUint32(18, db.length, true); h.setUint32(22, raw.length, true); h.setUint16(26, nb.length, true);
+        const c = new DataView(new ArrayBuffer(46)); c.setUint32(0, 0x02014b50, true); c.setUint16(10, deflate ? 8 : 0, true); c.setUint32(20, db.length, true); c.setUint32(24, raw.length, true); c.setUint16(28, nb.length, true); c.setUint32(42, off, true);
+        parts.push(new Uint8Array(h.buffer), nb, db); cd.push(new Uint8Array(c.buffer), nb); off += 30 + nb.length + db.length;
+      }
+      const n = Object.keys(files).length, cdLen = cd.reduce((s, a) => s + a.length, 0);
+      const e = new DataView(new ArrayBuffer(22)); e.setUint32(0, 0x06054b50, true); e.setUint16(8, n, true); e.setUint16(10, n, true); e.setUint32(12, cdLen, true); e.setUint32(16, off, true);
+      const buf = await new Blob([...parts, ...cd, new Uint8Array(e.buffer)]).arrayBuffer();
+
+      const I = WA.TMG_Import;
+      const sheets = await I.readXlsx(buf);
+      eq(sheets.map(s => s.name), ['THÁNG 10'], 'Tên sheet');
+      const p = I.parseSheet(sheets[0]);
+      eq(p.ym, '2026-10', 'Tháng');
+      eq(p.trips.map(t => [t.cont, t.plate, t.date, t.size, t.move, t.cust, t.inv]), [
+        ['TSTU1000001', '99Z-999.01', '2026-10-06', "40'", 'Xuất', 'Khách Thử A', '33'],
+        ['TSTU1000002', '99Z-999.02', '2026-10-07', "20'", 'Rỗng', 'Khách Thử A', '33'],
+        ['TSTU1000003', '99Z-999.01', '2026-11-04', "40'", 'Nhập', 'Khách Thử B', '34']], 'Dòng container (kế thừa khách / số HĐ của dòng gộp)');
+      ok(p.trips[1].note.includes('+NEO'), 'Ghi chú cột phụ: ' + p.trips[1].note);
+      eq([p.got.freight, p.got.lolo], [p.total.freight, p.total.lolo], 'Tổng đọc được phải khớp dòng TOTAL');
+      eq(p.costs.map(c => [c.no, c.amount]), [[1, 10000001], [4, 0], [8, 1500000]], 'Khoản chi phí tháng');
+      ok(p.warn.some(w => w.includes('không thuộc tháng')), 'Cảnh báo ngày ngoài tháng');
+
+      const R = { from: '2026-10-01', to: '2026-11-30' }, f0 = SA.finance(R);
+      const cnt = () => ['vehicle', 'customer', 'order', 'revenue', 'cost_request', 'op_cost'].map(c => SA.all(c).length);
+      const c0 = cnt();
+      const r1 = await I.apply(p, { vat: '8%' });
+      eq([r1.trips, r1.skipped, r1.revenue, r1.lolo, r1.costs], [3, 0, 12062500, 3852000, 11500001], 'Kết quả nhập');
+      eq(cnt().map((x, i) => x - c0[i]), [2, 2, 3, 5, 2, 4], 'Số bản ghi tạo mới (xe, khách, đơn, doanh thu, chi phí chi hộ, chi phí tháng)');
+      const f1 = SA.finance(R);
+      eq([f1.revenue - f0.revenue, f1.cost - f0.cost, f1.profit - f0.profit], [12062500 + 3852000, 3852000 + 11500001, 12062500 - 11500001], 'Tài chính sau khi nhập');
+      const od = SA.all('order').find(o => o.order_no === 'TSTU1000001');
+      eq([od.booking, od.cont_size, od.lift_fee, od.drop_fee, od.invoice_ref, od.freight, od.status], ['BK1', "40'", 1788000, 1064000, '33', 4062500, 'Hoàn thành']);
+      const codes = SA.all('order').map(o => o.code); eq(new Set(codes).size, codes.length, 'Mã đơn hàng bị trùng');
+      ok(SA.all('cost_request').filter(c => c.import_batch === 'TH-2026-10').every(c => c.status === 'Đã chi'), 'Chi hộ phải ở trạng thái Đã chi');
+
+      const r2 = await I.apply(p, { vat: '8%' });
+      eq([r2.trips, r2.skipped, r2.costs], [0, 3, 0], 'Nhập lại lần 2 phải bỏ qua hết');
+      eq(cnt().map((x, i) => x - c0[i]), [2, 2, 3, 5, 2, 4], 'Nhập lại không tạo trùng');
+      eq(I.existing(p), 3);
+
+      d3.querySelector('#modal-root').innerHTML = ''; WA.location.hash = '#/p/import_month'; await sleep(80);
+      ok(d3.querySelector('[data-undo="TH-2026-10"]'), 'Trang nhập chưa hiện đợt đã nhập');
+      eq(I.undo('TH-2026-10'), 14, 'Số bản ghi được gỡ');
+      const f2 = SA.finance(R); eq([f2.revenue, f2.cost], [f0.revenue, f0.cost], 'Gỡ xong tài chính phải về như cũ');
+      ok(SA.trash().filter(x => x.rec.import_batch === 'TH-2026-10').length === 14, 'Bản ghi gỡ phải nằm trong thùng rác');
+      ok(!A.errors.length, A.errors.join('\n'));
+    });
+
     // App tài xế
     const drv = SA.all('driver')[0];
     localStorage.setItem('tmg_driver_session_tst1', JSON.stringify({ driver_id: drv.id, vehicle_id: drv.vehicle_id }));

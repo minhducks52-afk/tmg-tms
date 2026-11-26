@@ -32,6 +32,15 @@
     f('extra_fee', 'Phụ phí', 'money', { list: false }),
     f('vat', 'VAT', 'select', { options: VAT, def: '8%', list: false }),
     f('revenue', 'Doanh thu', 'money', { sum: true, readonly: true, calc: r => U.num(r.freight) + U.num(r.extra_fee) }),
+    // Thông tin container (dùng cho vận tải container / nhập từ bảng tổng hợp tháng)
+    f('booking', 'Booking / Bill', 'text', { list: false }),
+    f('cont_size', 'Loại cont', 'select', { options: ["20'", "40'", "45'"], list: false }),
+    f('move_type', 'Xuất / Nhập / Rỗng', 'select', { options: ['Xuất', 'Nhập', 'Rỗng', 'Nội địa'], list: false }),
+    f('stuff_place', 'Địa điểm đóng / rút hàng', 'text', { list: false }),
+    f('lift_fee', 'Phí nâng (chi hộ, gồm VAT)', 'money', { list: false }),
+    f('drop_fee', 'Phí hạ (chi hộ, gồm VAT)', 'money', { list: false }),
+    f('deposit', 'Tiền cược cont', 'money', { list: false }),
+    f('invoice_ref', 'Số hóa đơn', 'text', { list: false }),
     f('note', 'Ghi chú', 'textarea', { list: false })
   ], { icon: 'order', rowActions: ['toRevenue'] });
 
@@ -117,7 +126,7 @@
   /* ===== TÀI CHÍNH ===== */
   def('revenue', 'Nhập doanh thu', 'Tài chính', [
     f('code', 'Mã phiếu', 'code', { prefix: 'DT' }), f('date', 'Ngày', 'date', { def: 'today', required: true }),
-    f('type', 'Loại doanh thu', 'select', { options: ['Cước vận chuyển', 'Phụ phí', 'Bốc xếp', 'Lưu ca / lưu đêm', 'Doanh thu khác'], def: 'Cước vận chuyển' }),
+    f('type', 'Loại doanh thu', 'select', { options: ['Cước vận chuyển', 'Phụ phí', 'Bốc xếp', 'Lưu ca / lưu đêm', 'Thu chi hộ (nâng/hạ)', 'Doanh thu khác'], def: 'Cước vận chuyển' }),
     refVehicle({ required: true }), refDriver(), refCustomer(),
     f('order_id', 'Đơn hàng', 'ref', { ref: 'order', show: 'order_no', list: false }),
     f('route_id', 'Chuyến xe', 'ref', { ref: 'route', show: 'code' }),
@@ -290,7 +299,7 @@
     { id: 'dashboard', title: 'Tổng quan', icon: 'home', page: 'dashboard' },
     { title: 'Đơn hàng', icon: 'doc', items: ['order', 'order_customer', 'invoice', 'document'] },
     { title: 'Vận hành', icon: 'truck', items: ['route', 'shipping_order', 'road', 'road_schedule', 'route_fuel', { id: 'board', title: 'Bảng điều vận', page: 'board' }] },
-    { title: 'Doanh thu & Chi phí', icon: 'money', items: ['revenue', 'cost_request', 'op_cost', 'receipt_voucher', 'payment_voucher'] },
+    { title: 'Doanh thu & Chi phí', icon: 'money', items: ['revenue', 'cost_request', 'op_cost', 'receipt_voucher', 'payment_voucher', { id: 'import_month', title: 'Nhập bảng tổng hợp tháng (Excel)', page: 'importMonth' }] },
     { title: 'Báo cáo', icon: 'chart', items: [{ id: 'rpt_vehicle', title: 'Lãi lỗ theo đầu xe', page: 'rptVehicle' }, { id: 'rpt_month', title: 'Doanh thu - chi phí theo tháng', page: 'rptMonth' }, { id: 'rpt_cat', title: 'Chi phí theo khoản mục', page: 'rptCat' }, { id: 'rpt_trip', title: 'Lãi lỗ theo chuyến', page: 'rptTrip' }, { id: 'rpt_fuel', title: 'Dầu: định mức và thực tế', page: 'rptFuel' }, { id: 'rpt_debt', title: 'Công nợ khách hàng', page: 'rptDebt' }, { id: 'rpt_settle', title: 'Quyết toán tạm ứng tài xế', page: 'rptSettle' }, { id: 'rpt_expiry', title: 'Cảnh báo hạn giấy tờ', page: 'rptExpiry' }] },
     { title: 'Tài xế', icon: 'user', items: ['driver', 'vehicle_team', 'advance_salary', 'time_sheet', 'salary', 'contract_salary', 'incident'] },
     { title: 'Xe', icon: 'car', items: ['vehicle', 'vehicle_group', 'contractor', 'trailer', 'container', 'repair_ticket', 'accessory', 'vehicle_tire', 'assets'] },

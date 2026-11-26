@@ -1129,6 +1129,70 @@
       });
     },
 
+    // Nhập "Bảng tổng hợp tháng" (Excel) -> đơn hàng, doanh thu, chi hộ nâng/hạ, chi phí tháng
+    importMonth(el) {
+      const I = window.TMG_Import, st = PAGES._im = PAGES._im || { parsed: null, file: '', vat: '8%', done: null, busy: false };
+      const redraw = () => PAGES.importMonth(el), rate = TMG_vatRate(st.vat);
+      const ck = (got, want) => want == null ? '' : got === want ? chip('Khớp TOTAL', 'ok') : chip('Lệch ' + U.money(got - want), 'warn');
+      const mLabel = ym => 'Tháng ' + +ym.slice(5) + '/' + ym.slice(0, 4);
+      const bs = I.batches();
+      el.innerHTML = head('Nhập bảng tổng hợp tháng', 'Đọc file Excel "Bảng tổng hợp tháng" (mỗi sheet một tháng: danh sách container + các khoản chi phí (1)…(9) cuối bảng) và đưa vào TMG.') + `<div class="stack">
+        ${isFinal() ? '' : '<div class="card"><div class="card-b muted">Chỉ Quản trị viên được nhập bảng tổng hợp (vì dữ liệu nhập vào được tính là đã duyệt / đã chi).</div></div>'}
+        <div class="card" ${isFinal() ? '' : 'hidden'}><div class="card-h"><h3>1. Chọn file</h3></div><div class="card-b">
+          <div class="form-grid"><div class="field"><label>File Excel (.xlsx)</label><input type="file" id="imf" accept=".xlsx"></div>
+          <div class="field"><label>Cột "CƯỚC (gồm VAT)" đang tính VAT</label><select id="imv">${['8%', '10%', '5%', 'Không chịu thuế'].map(v => `<option ${v === st.vat ? 'selected' : ''}>${v}</option>`).join('')}</select></div></div>
+          <div class="hint">Mỗi dòng container → <b>Đơn hàng</b> (đã hoàn thành) + <b>Doanh thu cước</b> (tách VAT) · Phí nâng/hạ → <b>Thu chi hộ</b> và <b>Chi phí chi hộ</b> bằng nhau (không làm đổi lãi, nhưng vào công nợ khách) · Các khoản (1)…(9) → <b>Chi phí vận hành</b> của tháng, chia đều cho các xe chạy trong tháng. Xe, khách, địa điểm chưa có sẽ được tạo mới. Dòng đã nhập trước sẽ tự bỏ qua.</div>
+        </div></div>
+        ${st.parsed ? `<div class="card" style="overflow:auto"><div class="card-h"><h3>2. Kiểm tra trước khi nhập — ${esc(st.file)}</h3></div><div class="card-b">
+          <table class="grid"><thead><tr><th class="nosort"></th><th class="nosort">Sheet</th><th class="nosort">Tháng</th><th class="num nosort">Số cont</th><th class="nosort">Cước gồm VAT</th><th class="nosort">Nâng / hạ chi hộ</th><th class="num nosort">Chi phí tháng</th><th class="num nosort">Lãi ước tính (trước VAT)</th><th class="nosort">Cảnh báo</th></tr></thead><tbody>
+          ${st.parsed.map((p, i) => { const ex = I.existing(p), rev = p.trips.reduce((s, t) => s + (rate ? Math.round(t.freight / (1 + rate)) : t.freight), 0); return `<tr>
+            <td><input type="checkbox" data-pi="${i}" ${ex < p.trips.length ? 'checked' : ''}></td><td class="code">${esc(p.name)}</td><td>${mLabel(p.ym)}</td>
+            <td class="num">${p.trips.length}${ex ? `<br><small class="muted">đã có ${ex}</small>` : ''}</td>
+            <td>${U.money(p.got.freight)} ${ck(p.got.freight, p.total && p.total.freight)}</td><td>${U.money(p.got.lolo)} ${ck(p.got.lolo, p.total && p.total.lolo)}</td>
+            <td class="num">${U.money(p.got.cost)}<br><small class="muted">${p.costs.filter(c => c.amount > 0).length} khoản</small></td>
+            <td class="num ${rev - p.got.cost < 0 ? 'neg' : ''}">${U.money(rev - p.got.cost)}</td>
+            <td style="white-space:normal;min-width:220px">${p.warn.length ? `<details><summary>${chip(p.warn.length + ' cảnh báo', 'warn')}</summary><small>${p.warn.map(esc).join('<br>')}</small></details>` : chip('Không có', 'ok')}</td></tr>`; }).join('')}
+          </tbody></table>
+          <p class="muted" style="margin:10px 0">"Lãi ước tính" = cước trước VAT − chi phí tháng (phí nâng/hạ chi hộ thu và chi bằng nhau nên không tính). Trong file gốc, lãi được tính trên cước <b>gồm</b> VAT nên sẽ cao hơn.</p>
+          <button class="btn primary" id="imgo" ${st.busy ? 'disabled' : ''}>${ic('check')} Nhập các tháng đã chọn</button> <button class="btn" id="imx">Huỷ</button>
+        </div></div>` : ''}
+        ${st.done ? `<div class="card"><div class="card-h"><h3>Đã nhập xong</h3></div><div class="card-b">
+          ${st.done.map(r => `<div style="margin-bottom:8px"><b>${mLabel(r.ym)}</b> (${esc(r.sheet)}): ${r.trips} container${r.skipped ? `, bỏ qua ${r.skipped} đã có` : ''} · doanh thu cước ${U.money(r.revenue)} đ · chi hộ ${U.money(r.lolo)} đ · chi phí tháng ${U.money(r.costs)} đ
+            <br><small class="muted">Tạo mới: ${Object.entries(r.created).filter(([, n]) => n).map(([c, n]) => `${esc(M[c] ? M[c].title : c)} ${n}`).join(', ') || 'không có'}</small></div>`).join('')}
+          <a class="btn" href="#/p/rpt_month">Doanh thu - chi phí theo tháng</a> <a class="btn" href="#/p/rpt_vehicle">Lãi lỗ theo đầu xe</a> <a class="btn" href="#/p/rpt_debt">Công nợ khách hàng</a>
+        </div></div>` : ''}
+        <div class="card" style="overflow:auto"><div class="card-h"><h3>Các tháng đã nhập từ bảng tổng hợp</h3></div><div class="card-b">
+          <table class="grid"><thead><tr><th class="nosort">Tháng</th><th class="nosort">Số bản ghi</th><th class="nosort">Lúc nhập</th><th class="nosort"></th></tr></thead><tbody>
+          ${bs.map(b => `<tr><td class="code">${mLabel(b.ym)}</td><td>${Object.entries(b.counts).map(([c, n]) => `${esc(M[c].title)} ${n}`).join(' · ')}</td><td>${U.date(b.at)}</td><td style="text-align:right">${isFinal() ? `<button class="btn sm danger" data-undo="${esc(b.batch)}">Gỡ đợt nhập</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="4"><div class="empty">Chưa nhập tháng nào</div></td></tr>'}
+          </tbody></table><div class="hint">"Gỡ đợt nhập" chuyển đơn hàng, doanh thu, chi phí của tháng đó vào Thùng rác (khôi phục được). Xe, khách hàng, địa điểm đã tạo được giữ lại.</div></div></div></div>`;
+      $('#imv', el).onchange = e => { st.vat = e.target.value; if (st.parsed) redraw(); };
+      $('#imf', el).onchange = async e => {
+        const f = e.target.files[0]; if (!f) return;
+        try {
+          const sheets = await I.readXlsx(await f.arrayBuffer());
+          const parsed = sheets.map(I.parseSheet).filter(p => p && (p.trips.length || p.costs.length));
+          if (!parsed.length) { alert('Không tìm thấy bảng tổng hợp trong file (cần có dòng tiêu đề chứa "Số Container").'); return; }
+          Object.assign(st, { parsed, file: f.name, done: null }); redraw();
+        } catch (err) { alert('Không đọc được file: ' + err.message); }
+      };
+      if (st.parsed) {
+        $('#imx', el).onclick = () => { st.parsed = null; redraw(); };
+        $('#imgo', el).onclick = async () => {
+          const pick = $$('[data-pi]', el).filter(c => c.checked).map(c => st.parsed[+c.dataset.pi]);
+          if (!pick.length) { alert('Chưa chọn tháng nào'); return; }
+          if (!confirm(`Nhập ${pick.length} tháng (${pick.map(p => mLabel(p.ym)).join(', ')}) vào TMG?`)) return;
+          st.busy = true; redraw(); const done = [];
+          try { for (const p of pick) done.push(await I.apply(p, { vat: st.vat })); toast('Đã nhập ' + done.length + ' tháng'); }
+          catch (err) { alert('Lỗi khi nhập: ' + err.message + (done.length ? `\nĐã nhập xong: ${done.map(r => mLabel(r.ym)).join(', ')}` : '')); }
+          Object.assign(st, { busy: false, parsed: null, done }); redraw();
+        };
+      }
+      $$('[data-undo]', el).forEach(b => b.onclick = () => {
+        if (!confirm('Gỡ toàn bộ dữ liệu đã nhập của ' + mLabel(b.dataset.undo.slice(3)) + '? (chuyển vào Thùng rác, khôi phục được)')) return;
+        toast('Đã chuyển ' + I.undo(b.dataset.undo) + ' bản ghi vào Thùng rác'); st.done = null; redraw();
+      });
+    },
+
     settings(el) {
       const s = Store.settings();
       el.innerHTML = head('Thiết lập công ty') + `<form class="card" id="sf" style="max-width:760px"><div class="card-b"><div class="form-grid">
@@ -1235,7 +1299,7 @@
       $('#uf', layer).onsubmit = e => { e.preventDefault(); const f = new FormData(e.target); close(); act(() => C.users.create(f.get('e'), f.get('p'), f.get('n'), f.get('r')), 'Đã tạo tài khoản ' + f.get('e')); };
     });
   };
-  PAGES.rpt_vehicle = PAGES.rptVehicle; PAGES.rpt_month = PAGES.rptMonth; PAGES.rpt_cat = PAGES.rptCat; PAGES.rpt_expiry = PAGES.rptExpiry; PAGES.rpt_trip = PAGES.rptTrip; PAGES.rpt_fuel = PAGES.rptFuel; PAGES.rpt_debt = PAGES.rptDebt; PAGES.rpt_settle = PAGES.rptSettle;
+  PAGES.rpt_vehicle = PAGES.rptVehicle; PAGES.rpt_month = PAGES.rptMonth; PAGES.rpt_cat = PAGES.rptCat; PAGES.rpt_expiry = PAGES.rptExpiry; PAGES.rpt_trip = PAGES.rptTrip; PAGES.rpt_fuel = PAGES.rptFuel; PAGES.rpt_debt = PAGES.rptDebt; PAGES.rpt_settle = PAGES.rptSettle; PAGES.import_month = PAGES.importMonth;
 
   // Tab khác (VD: App tài xế) vừa ghi dữ liệu -> vẽ lại nếu người dùng không đang thao tác
   Store.onChange = () => {
