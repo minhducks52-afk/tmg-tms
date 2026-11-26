@@ -227,7 +227,9 @@
       finally { Cloud.syncing = false; Cloud.emit(); }
     },
     async pull() {
-      const last = mem.meta.lastPull || '1970-01-01T00:00:00+00:00'; let off = 0, max = last, changed = false;
+      // PULL_V tăng khi quyền đọc trên máy chủ mở rộng (VD: tài xế được đọc phiếu chi tạm ứng) -> lấy lại toàn bộ 1 lần
+      const PULL_V = 2; const full = mem.meta.pullV !== PULL_V;
+      const last = (!full && mem.meta.lastPull) || '1970-01-01T00:00:00+00:00'; let off = 0, max = last, changed = false;
       for (;;) {
         const { data, error } = await Cloud.client.from('tmg_records').select('col,id,data,updated_at').gt('updated_at', last).order('updated_at').order('col').order('id').range(off, off + 999);
         if (error) throw new Error(error.message);
@@ -235,7 +237,7 @@
         data.forEach(r => { if (r.updated_at > max) max = r.updated_at; });
         off += data.length; if (data.length < 1000) break;
       }
-      saveMeta(m => { m.lastPull = max; });
+      saveMeta(m => { m.lastPull = max; m.pullV = PULL_V; });
       if (changed && Store.onChange) Store.onChange('cloud');
     },
     subscribe() {
@@ -555,6 +557,26 @@
     const revenue = rows.filter(r => r.kind === 'rev').reduce((s, r) => s + r.amount, 0);
     const cost = rows.filter(r => r.kind === 'cost').reduce((s, r) => s + r.amount, 0);
     return { rows, revenue, cost, profit: revenue - cost };
+  };
+
+  /* ---- Phiếu chi tạm ứng cho tài xế: trừ dần theo chi phí / dầu tài xế nhập "Trừ vào tạm ứng" ---- */
+  Store.advanceUse = function (pv) {
+    const reqs = Store.all('cost_request').filter(c => c.advance_id === pv.id && c.status !== 'Từ chối');
+    const fuels = Store.all('route_fuel').filter(f => f.advance_id === pv.id);
+    const pending = reqs.filter(c => !['Đã duyệt', 'Đã chi'].includes(c.status)).reduce((s, c) => s + U.num(c.amount), 0);
+    const used = reqs.reduce((s, c) => s + U.num(c.amount), 0) + fuels.reduce((s, f) => s + U.num(f.total), 0);
+    return { reqs, fuels, used, pending, remain: U.num(pv.amount) - used };
+  };
+  // Các phiếu tạm ứng còn hiệu lực của tài xế, cũ nhất trước
+  Store.openAdvances = function (driverId) {
+    return Store.all('payment_voucher').filter(p => p.driver_id === driverId && p.kind === 'Tạm ứng cho tài xế' && p.adv_status !== 'Đã quyết toán')
+      .map(pv => Object.assign({ pv }, Store.advanceUse(pv))).sort((a, b) => String(a.pv.date).localeCompare(String(b.pv.date)));
+  };
+  // Chọn phiếu để trừ: phiếu cũ nhất còn đủ tiền, nếu không có thì phiếu cũ nhất còn tiền
+  Store.pickAdvance = function (driverId, amount) {
+    const open = Store.openAdvances(driverId).filter(a => a.remain > 0);
+    const a = open.find(x => x.remain >= amount) || open[0];
+    return a ? a.pv : null;
   };
 
   // Đồng bộ khi tab khác (VD: App tài xế) thay đổi dữ liệu

@@ -30,13 +30,16 @@
   const seenKey = () => SKEY + ':seen:' + S.driver_id;
   const seenAt = () => { let v = localStorage.getItem(seenKey()); if (!v) { v = U.stamp(); localStorage.setItem(seenKey(), v); } return v; };
   const markSeen = () => localStorage.setItem(seenKey(), U.stamp());
+  // Mỗi mục: { id, code, title, by, at, amount, status, reason }
   function updates() {
     const since = seenAt(), name = me().name, out = [];
-    Store.all('cost_request').forEach(r => { if (r.vehicle_id === S.vehicle_id && r.updated_at > since && r.updated_by !== name && ['Kế toán đã duyệt', 'Đã duyệt', 'Từ chối', 'Đã chi'].includes(r.status)) out.push(r); });
-    Store.all('revenue').forEach(r => { if (r.vehicle_id === S.vehicle_id && r.updated_at > since && r.updated_by !== name && ['Đã xác nhận', 'Từ chối'].includes(r.status)) out.push(r); });
-    return out.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
-  }
-  const me = () => Store.get('driver', S.driver_id);
+    const push = (r, title) => out.push({ id: r.id, code: r.code, title, by: r.updated_by, at: r.updated_at, amount: r.amount, status: r.status, reason: r.reject_reason });
+    Store.all('cost_request').forEach(r => { if (r.vehicle_id === S.vehicle_id && r.updated_at > since && r.updated_by !== name && ['Kế toán đã duyệt', 'Đã duyệt', 'Từ chối', 'Đã chi'].includes(r.status)) push(r, Store.label('cost_category', r.category_id) || 'Chi phí'); });
+    Store.all('revenue').forEach(r => { if (r.vehicle_id === S.vehicle_id && r.updated_at > since && r.updated_by !== name && ['Đã xác nhận', 'Từ chối'].includes(r.status)) push(r, r.type); });
+    // Văn phòng lập phiếu chi tạm ứng cho tài xế
+    Store.all('payment_voucher').forEach(r => { if (r.driver_id === S.driver_id && r.kind === 'Tạm ứng cho tài xế' && r.created_at > since && r.created_by !== name) out.push({ id: r.id, code: r.code, title: 'Tạm ứng' + (r.purpose ? ': ' + r.purpose : ''), by: r.created_by, at: r.created_at, amount: r.amount, status: 'Tiền tạm ứng mới' }); });
+    return out.sort((a, b) => String(b.at).localeCompare(String(a.at)));
+  }  const me = () => Store.get('driver', S.driver_id);
   const car = () => Store.get('vehicle', S.vehicle_id);
   const ins = (col, rec) => Store.insert(col, Object.assign({ source: 'App' }, rec), me().name);
 
@@ -153,22 +156,33 @@
     const v = S.vehicle_id; const out = [];
     Store.all('cost_request').filter(r => r.vehicle_id === v).forEach(r => out.push({ k: 'cost', title: Store.label('cost_category', r.category_id) || 'Chi phí', date: r.date, code: r.code, amount: r.amount, sign: -1, status: r.status, sub: r.description, reason: r.reject_reason ? 'Lý do: ' + r.reject_reason : '' }));
     Store.all('route_fuel').filter(r => r.vehicle_id === v).forEach(r => out.push({ k: 'fuel', title: 'Nhiên liệu ' + (r.liters || '') + ' lít', date: r.date, code: r.code, amount: r.total, sign: -1, status: r.pay_status, sub: r.fuel_type }));
+    Store.all('payment_voucher').filter(r => r.driver_id === S.driver_id && r.kind === 'Tạm ứng cho tài xế').forEach(r => { const u = Store.advanceUse(r); out.push({ k: 'adv', title: 'Nhận tạm ứng' + (r.purpose ? ': ' + r.purpose : ''), date: r.date, code: r.code, amount: r.amount, sign: 1, status: r.adv_status === 'Đã quyết toán' ? 'Đã quyết toán' : 'Còn ' + U.money(u.remain) + ' đ', sub: 'Đã dùng ' + U.money(u.used) + ' đ' }); });
     Store.all('revenue').filter(r => r.vehicle_id === v).forEach(r => out.push({ k: 'rev', title: r.type, date: r.date, code: r.code, amount: r.amount, sign: 1, status: r.status, sub: Store.label('customer', r.customer_id) }));
     return out.sort((a, b) => String(b.date).localeCompare(String(a.date)));
   }
-  const VIEWS = {
+  // Tiền tạm ứng (phiếu chi văn phòng lập cho tài xế) còn lại
+  const advLeft = () => Store.openAdvances(S.driver_id).reduce((s, a) => s + Math.max(0, a.remain), 0);
+  function advCards() {
+    const list = Store.openAdvances(S.driver_id); if (!list.length) return '';
+    return `<div class="sec"><h2>Tiền tạm ứng</h2><a data-tab="money" data-sub="adv">Chi tiết</a></div>` + list.map(a => {
+      const pct = U.num(a.pv.amount) ? Math.min(100, Math.round(a.used / U.num(a.pv.amount) * 100)) : 0;
+      return `<div class="card"><div class="t"><div><b>${esc(a.pv.code)}</b>${a.pv.purpose ? ' · ' + esc(a.pv.purpose) : ''}<div class="m">${U.date(a.pv.date)} · Ứng ${U.money(a.pv.amount)} đ · Đã dùng ${U.money(a.used)} đ</div></div><div style="text-align:right"><div class="amt" style="color:${a.remain < 0 ? 'var(--bad)' : 'var(--ok)'}">${a.remain < 0 ? 'Vượt ' + U.money(-a.remain) : 'Còn ' + U.money(a.remain)}</div></div></div>
+        <div style="height:6px;border-radius:3px;background:var(--line,#e5e7eb);margin-top:8px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${a.remain < 0 ? 'var(--bad)' : 'var(--brand,#e8202e)'}"></div></div></div>`;
+    }).join('');
+  }  const VIEWS = {
     home(el) {
       const act = myRoutes().filter(r => r.status === 'Đang chạy' || r.status === 'Chưa bắt đầu').sort((a, b) => (a.status === 'Đang chạy' ? -1 : 1));
       const pend = Store.all('cost_request').filter(r => r.vehicle_id === S.vehicle_id && (r.status === 'Chờ duyệt' || r.status === 'Kế toán đã duyệt'));
       const upd = updates();
-      el.innerHTML = `${upd.length ? `<div class="sec"><h2>Văn phòng vừa xử lý (${upd.length})</h2><a data-tab="money">Đã xem</a></div>${upd.slice(0, 4).map(r => `<div class="card new"><div class="t"><div><b>${esc(r.code)}</b> · ${esc(r.category_id ? Store.label('cost_category', r.category_id) : r.type)}<div class="m">${esc(r.updated_by)} · ${U.date(r.updated_at)}${r.reject_reason ? '<br>Lý do: ' + esc(r.reject_reason) : ''}</div></div><div style="text-align:right"><div class="amt">${U.money(r.amount)}</div>${chip(r.status)}</div></div></div>`).join('')}` : ''}
+      el.innerHTML = `${upd.length ? `<div class="sec"><h2>Văn phòng vừa xử lý (${upd.length})</h2><a data-tab="money">Đã xem</a></div>${upd.slice(0, 4).map(r => `<div class="card new"><div class="t"><div><b>${esc(r.code)}</b> · ${esc(r.title)}<div class="m">${esc(r.by)} · ${U.date(r.at)}${r.reason ? '<br>Lý do: ' + esc(r.reason) : ''}</div></div><div style="text-align:right"><div class="amt">${U.money(r.amount)}</div>${chip(r.status)}</div></div></div>`).join('')}` : ''}
+        ${advCards()}
         <div class="sec"><h2>Thao tác nhanh</h2></div>${quick()}
         <div class="sec"><h2>Chuyến hiện tại</h2><a data-tab="trips">Tất cả</a></div>
         ${act.length ? act.slice(0, 3).map(routeCard).join('') : `<div class="card empty">Chưa có chuyến được giao<br><button class="btn sm ghost" style="margin:10px auto 0" id="selfroute">+ Tự tạo chuyến</button></div>`}
         ${pend.length ? `<div class="sec"><h2>Đang chờ duyệt (${pend.length})</h2><a data-tab="money">Xem</a></div><div class="card"><div class="t"><span>${pend.length} đề nghị chi phí</span><b class="amt">${U.money(pend.reduce((s, r) => s + U.num(r.amount), 0))} đ</b></div></div>` : ''}
         <div class="sec"><h2>Gần đây</h2></div>${myMoney().slice(0, 5).map(itemCard).join('') || '<div class="empty">Chưa có giao dịch</div>'}`;
       bindQuick(el); bindRoutes(el);
-      $$('[data-tab]', el).forEach(a => a.onclick = () => { tab = a.dataset.tab; render(); });
+      $$('[data-tab]', el).forEach(a => a.onclick = () => { tab = a.dataset.tab; sub = a.dataset.sub || null; render(); });
       const sr = $('#selfroute', el); if (sr) sr.onclick = () => FORMS.route();
     },
     trips(el) {
@@ -185,7 +199,7 @@
       sub = sub || 'all';
       const items = myMoney().filter(x => sub === 'all' || x.k === sub);
       el.innerHTML = `<div class="sec"><h2>Thu chi của xe</h2></div>
-        <div class="tabs">${[['all', 'Tất cả'], ['cost', 'Đề nghị chi phí'], ['fuel', 'Nhiên liệu'], ['rev', 'Doanh thu']].map(([k, l]) => `<button data-s="${k}" class="${sub === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+        <div class="tabs">${[['all', 'Tất cả'], ['adv', 'Tạm ứng'], ['cost', 'Đề nghị chi phí'], ['fuel', 'Nhiên liệu'], ['rev', 'Doanh thu']].map(([k, l]) => `<button data-s="${k}" class="${sub === k ? 'on' : ''}">${l}</button>`).join('')}</div>
         ${items.slice(0, 100).map(itemCard).join('') || '<div class="empty">Chưa có dữ liệu</div>'}`;
       $$('[data-s]', el).forEach(b => b.onclick = () => { sub = b.dataset.s; VIEWS.money(el); });
     },
@@ -198,6 +212,7 @@
       const th = localStorage.getItem(THEME_KEY) || 'auto';
       el.innerHTML = `<div class="sec"><h2>Tài xế</h2></div><div class="card">${row('Họ tên', esc(d.name))}${row('Mã', esc(d.code))}${row('Điện thoại', esc(d.phone))}${row('Bằng lái', esc(d.license_class))}${row('Hạn GPLX', U.date(d.license_exp))}</div>
         <div class="card"><div class="t"><span>Công ty còn nợ bạn (đã duyệt, chưa chi)</span><b class="amt">${U.money(adv)} đ</b></div></div>
+        <div class="card"><div class="t"><span>Tiền tạm ứng còn lại (phiếu chi)</span><b class="amt">${U.money(Store.openAdvances(d.id).reduce((s, a) => s + a.remain, 0))} đ</b></div></div>
         <div class="card"><div class="t"><span>Tạm ứng chuyến chưa quyết toán</span><b class="amt">${U.money(unset)} đ</b></div></div>
         <div class="sec"><h2>Xe ${esc(v.plate)}</h2></div><div class="card">${row('Chủng loại', esc(Store.label('vehicle_group', v.group_id)))}${row('Số km', U.money(v.odometer))}${row('Hạn đăng kiểm', U.date(v.inspection_exp))}${row('Hạn bảo hiểm', U.date(v.insurance_exp))}${row('Định mức dầu', v.fuel_norm ? v.fuel_norm + ' L/100km' : '')}</div>
         <div class="sec"><h2>Bảng lương</h2></div>${sal.map(s => `<div class="card"><div class="t"><span>Tháng ${esc(s.month)}</span><div style="text-align:right"><b class="amt">${U.money(s.total)}</b><br>${chip(s.status)}</div></div>${s.status === 'Gửi tài xế' ? `<div class="acts"><button class="btn sm ok" data-sal="${s.id}">Xác nhận lương</button></div>` : ''}</div>`).join('') || '<div class="empty">Chưa có bảng lương</div>'}
@@ -248,14 +263,16 @@
         <div class="f"><label>Khoản chi</label><div class="chips">${cats.map((c, i) => `<label><input type="radio" name="cat" value="${c.id}" ${i === 0 ? 'checked' : ''}><span>${esc(c.name)}</span></label>`).join('')}</div></div>
         <div class="f"><label>Số tiền (đ)</label><input class="money" name="amt" inputmode="numeric" required placeholder="0"></div>
         <div class="two"><div class="f"><label>Ngày</label><input type="date" name="date" value="${U.today()}" required></div>
-        <div class="f"><label>Hình thức</label><select name="pm"><option>Tài xế ứng trước</option><option>Đề nghị tạm ứng</option></select></div></div>
+        <div class="f"><label>Hình thức</label><select name="pm">${advLeft() > 0 ? `<option value="Trừ vào tạm ứng" selected>Trừ vào tạm ứng (còn ${U.money(advLeft())} đ)</option>` : ''}<option>Tài xế ứng trước</option><option>Đề nghị tạm ứng</option></select></div></div>
         ${routeSelect(route)}
         <div class="f"><label>Nội dung</label><textarea name="desc" rows="2" placeholder="VD: Vé BOT Pháp Vân, bốc xếp tại kho..."></textarea></div>
         ${photo()}<button class="btn">Gửi đề nghị</button></form>`, (root, close) => {
         $('#f', root).onsubmit = async e => {
           e.preventDefault(); const f = new FormData(e.target); const amt = U.num(f.get('amt')); if (!amt) return toast('Nhập số tiền');
-          ins('cost_request', { code: Store.nextCode('cost_request', 'DN'), date: f.get('date'), vehicle_id: S.vehicle_id, driver_id: S.driver_id, route_id: f.get('route'), category_id: f.get('cat'), amount: amt, pay_method: f.get('pm'), description: f.get('desc') || Store.label('cost_category', f.get('cat')), image: (await photoVal(root)), status: 'Chờ duyệt', approver: '' });
-          done(close, 'Đã gửi đề nghị — chờ duyệt');
+          const adv = f.get('pm') === 'Trừ vào tạm ứng' ? Store.pickAdvance(S.driver_id, amt) : null;
+          if (f.get('pm') === 'Trừ vào tạm ứng' && !adv) return toast('Không còn tiền tạm ứng');
+          ins('cost_request', { code: Store.nextCode('cost_request', 'DN'), advance_id: adv ? adv.id : '', date: f.get('date'), vehicle_id: S.vehicle_id, driver_id: S.driver_id, route_id: f.get('route'), category_id: f.get('cat'), amount: amt, pay_method: f.get('pm'), description: f.get('desc') || Store.label('cost_category', f.get('cat')), image: (await photoVal(root)), status: 'Chờ duyệt', approver: '' });
+          done(close, adv ? `Đã gửi — trừ vào tạm ứng ${adv.code}, còn ${U.money(Store.advanceUse(adv).remain)} đ` : 'Đã gửi đề nghị — chờ duyệt');
         };
       });
     },
@@ -265,14 +282,16 @@
         <div class="f"><label>Loại nhiên liệu</label><select name="t">${['Dầu Diesel 0,05S-II', 'Dầu Diesel 0,001S-V', 'Xăng A95', 'Xăng E5 RON92', 'Khí thải Ure'].map(x => `<option>${x}</option>`).join('')}</select></div>
         <div class="two"><div class="f"><label>Số lít</label><input name="l" type="number" step="0.01" inputmode="decimal" required></div><div class="f"><label>Đơn giá (đ/lít)</label><input name="p" class="money" inputmode="numeric" value="${price ? U.money(price) : ''}" required></div></div>
         <div class="f"><label>Thành tiền</label><input id="tt" class="money" readonly></div>
-        <div class="two"><div class="f"><label>Km đồng hồ</label><input name="km" type="number" inputmode="numeric" value="${v.odometer || ''}" required></div><div class="f"><label>Thanh toán</label><select name="pt"><option>Công ty thanh toán</option><option>Tự thanh toán</option></select></div></div>
+        <div class="two"><div class="f"><label>Km đồng hồ</label><input name="km" type="number" inputmode="numeric" value="${v.odometer || ''}" required></div><div class="f"><label>Thanh toán</label><select name="pt">${advLeft() > 0 ? `<option value="Trừ vào tạm ứng">Trừ vào tạm ứng (còn ${U.money(advLeft())} đ)</option>` : ''}<option selected>Công ty thanh toán</option><option>Tự thanh toán</option></select></div></div>
         <div class="f"><label>Cây xăng</label><input name="st" placeholder="Tên cây xăng / địa điểm"></div>
         ${routeSelect()}${photo('Chụp hoá đơn đổ dầu')}<button class="btn">Lưu</button></form>`, (root, close) => {
         const form = $('#f', root); const calc = () => { $('#tt', root).value = U.money(Math.round((Number(form.l.value) || 0) * U.num(form.p.value))); };
         form.addEventListener('input', calc); calc();
         form.onsubmit = async e => {
           e.preventDefault(); const f = new FormData(form); const km = Number(f.get('km')); const liters = Number(f.get('l')); const p = U.num(f.get('p'));
-          ins('route_fuel', { code: Store.nextCode('route_fuel', 'NL'), pay_type: f.get('pt'), pay_status: f.get('pt') === 'Tự thanh toán' ? 'Chưa thanh toán' : 'Đã thanh toán', date: U.today(), fuel_type: f.get('t'), liters, price: p, total: Math.round(liters * p), route_id: f.get('route'), vehicle_id: S.vehicle_id, driver_id: S.driver_id, km_old: v.odometer || '', km_now: km, station: f.get('st'), image: (await photoVal(root)) });
+          const adv = f.get('pt') === 'Trừ vào tạm ứng' ? Store.pickAdvance(S.driver_id, Math.round(liters * p)) : null;
+          if (f.get('pt') === 'Trừ vào tạm ứng' && !adv) return toast('Không còn tiền tạm ứng');
+          ins('route_fuel', { code: Store.nextCode('route_fuel', 'NL'), advance_id: adv ? adv.id : '', pay_type: f.get('pt'), pay_status: f.get('pt') === 'Tự thanh toán' ? 'Chưa thanh toán' : 'Đã thanh toán', date: U.today(), fuel_type: f.get('t'), liters, price: p, total: Math.round(liters * p), route_id: f.get('route'), vehicle_id: S.vehicle_id, driver_id: S.driver_id, km_old: v.odometer || '', km_now: km, station: f.get('st'), image: (await photoVal(root)) });
           if (km > U.num(v.odometer)) Store.update('vehicle', v.id, { odometer: km }, me().name);
           done(close, 'Đã ghi nhận đổ nhiên liệu');
         };

@@ -58,6 +58,8 @@ create or replace function public.tmg_driver_can_read(p_col text, p_id text, p_d
     when p_col = 'driver' then p_id = public.tmg_driver()
     when p_col in ('route', 'order', 'revenue', 'cost_request', 'route_fuel', 'incident', 'op_cost', 'repair_ticket') then (p_data->>'vehicle_id') = any(public.tmg_my_vehicles())
     when p_col = 'salary' then (p_data->>'driver_id') = public.tmg_driver()
+    -- phiếu chi tạm ứng văn phòng lập cho chính tài xế (để báo trên App và trừ dần)
+    when p_col = 'payment_voucher' then (p_data->>'driver_id') = public.tmg_driver()
     else false end
 $$;
 
@@ -116,6 +118,10 @@ begin
   end if;
   if new.col = 'cost_request' and s_new = 'Đã chi' and s_new is distinct from s_old and r <> 'admin' and coalesce(s_old, '') <> 'Đã duyệt' then
     raise exception 'Đề nghị phải được Quản trị viên xác nhận trước khi chi';
+  end if;
+  if new.col = 'payment_voucher' and new.data->>'adv_status' = 'Đã quyết toán' and r not in ('admin', 'accountant')
+     and (tg_op = 'INSERT' or (old.data->>'adv_status') is distinct from 'Đã quyết toán') then
+    raise exception 'Chỉ Kế toán / Quản trị viên được quyết toán tạm ứng';
   end if;
   if new.col = 'route' and new.data->>'settle' = 'Đã quyết toán' and r not in ('admin', 'accountant')
      and (tg_op = 'INSERT' or (old.data->>'settle') is distinct from 'Đã quyết toán') then
@@ -253,3 +259,4 @@ do $$ begin
 end $$;
 
 select public.tmg_status() as "Cài đặt xong — trạng thái";
+

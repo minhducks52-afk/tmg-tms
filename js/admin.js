@@ -637,18 +637,21 @@
     const s = session(); const t = U.now();
     if (ok !== true) return Store.update('cost_request', r.id, { status: 'Từ chối', approver: s.name, approved_at: t, reject_reason: ok });
     if (r.status === 'Chờ duyệt' && !isFinal()) return Store.update('cost_request', r.id, { status: 'Kế toán đã duyệt', acc_approver: s.name, acc_approved_at: t, reject_reason: '' });
-    return Store.update('cost_request', r.id, { status: 'Đã duyệt', approver: s.name, approved_at: t, acc_approver: r.acc_approver || s.name, acc_approved_at: r.acc_approved_at || t, reject_reason: '' });
+    const fin = { approver: s.name, approved_at: t, acc_approver: r.acc_approver || s.name, acc_approved_at: r.acc_approved_at || t, reject_reason: '' };
+    // Chi phí trừ vào phiếu tạm ứng: tiền đã đưa tài xế từ trước -> duyệt xong là "Đã chi", không chi lần nữa
+    if (r.advance_id && Store.get('payment_voucher', r.advance_id)) return Store.update('cost_request', r.id, Object.assign(fin, { status: 'Đã chi', paid_at: U.today(), voucher_id: r.advance_id }));
+    return Store.update('cost_request', r.id, Object.assign(fin, { status: 'Đã duyệt' }));
   };
   const canStep = r => (r.status === 'Chờ duyệt' && canApprove()) || (r.status === 'Kế toán đã duyệt' && isFinal());
   // Đánh dấu "Đã chi" + tự tạo phiếu chi
   function markPaid(r, method) {
-    const pc = Store.insert('payment_voucher', { code: Store.nextCode('payment_voucher', 'PC'), driver_id: r.driver_id || '', vehicle_id: r.vehicle_id || '', date: U.today(), amount: U.num(r.amount), method: method || 'Tiền mặt', cost_request_id: r.id, note: 'Chi đề nghị ' + (r.code || '') + (r.description ? ' - ' + r.description : '') });
+    const pc = Store.insert('payment_voucher', { code: Store.nextCode('payment_voucher', 'PC'), driver_id: r.driver_id || '', vehicle_id: r.vehicle_id || '', date: U.today(), amount: U.num(r.amount), method: method || 'Tiền mặt', kind: 'Thanh toán chi phí', cost_request_id: r.id, note: 'Chi đề nghị ' + (r.code || '') + (r.description ? ' - ' + r.description : '') });
     Store.update('cost_request', r.id, { status: 'Đã chi', paid_at: U.today(), voucher_id: pc.id });
     return pc;
   }
   // Quyết toán chuyến: tạm ứng chuyến - chi phí tài xế đã ứng (đã duyệt, chưa chi) - dầu tài xế tự trả
   function settlement(rt) {
-    const own = c => c.route_id === rt.id && c.pay_method !== 'Công ty chi trực tiếp';
+    const own = c => c.route_id === rt.id && c.pay_method !== 'Công ty chi trực tiếp' && !c.advance_id;
     const reqs = Store.all('cost_request').filter(c => own(c) && c.status === 'Đã duyệt');
     const pending = Store.all('cost_request').filter(c => own(c) && ['Chờ duyệt', 'Kế toán đã duyệt'].includes(c.status));
     const fuels = Store.all('route_fuel').filter(f => f.route_id === rt.id && f.pay_type === 'Tự thanh toán' && f.pay_status !== 'Đã thanh toán');
@@ -673,7 +676,7 @@
         reviewModal(lvl2 ? 'Xác nhận duyệt chi (Quản trị viên)' : (isFinal() ? 'Duyệt đề nghị chi phí (Quản trị viên)' : 'Duyệt đề nghị chi phí (Kế toán)'), [
           ['Mã', esc(r.code)], ['Xe', esc(Store.label('vehicle', r.vehicle_id))], ['Tài xế', esc(Store.label('driver', r.driver_id))], ['Khoản mục', esc(Store.label('cost_category', r.category_id))],
           ['Số tiền', `<b>${U.money(r.amount)} đ</b>`], ['Ngày', U.date(r.date)], ['Nội dung', esc(r.description)], ['Hình thức', esc(r.pay_method)]
-        ].concat(lvl2 ? [['Kế toán duyệt', esc((r.acc_approver || '') + ' · ' + U.date(r.acc_approved_at))]] : [['Sau khi duyệt', isFinal() ? 'Đã duyệt (tính vào chi phí xe)' : 'Chuyển Quản trị viên xác nhận']]), r.image,
+        ].concat(r.advance_id ? [['Trừ vào tạm ứng', (() => { const pv = Store.get('payment_voucher', r.advance_id); return pv ? `<b>${esc(pv.code)}</b> · ${esc(pv.purpose || '')} · còn ${U.money(Store.advanceUse(pv).remain)} đ<br><span class="muted">Duyệt xong chuyển thẳng "Đã chi" (tiền đã ứng trước)</span>` : '—'; })()]] : []).concat(lvl2 ? [['Kế toán duyệt', esc((r.acc_approver || '') + ' · ' + U.date(r.acc_approved_at))]] : [['Sau khi duyệt', isFinal() ? 'Đã duyệt (tính vào chi phí xe)' : 'Chuyển Quản trị viên xác nhận']]), r.image,
         ok => { approveRec(r, ok); const n = Store.get('cost_request', r.id); toast(ok === true ? (n.status === 'Đã duyệt' ? 'Đã duyệt ' : 'Kế toán đã duyệt, chờ QTV xác nhận: ') + r.code : 'Đã từ chối ' + r.code); draw && draw(); refreshBell(); });
       },
       bulk: {
@@ -702,7 +705,7 @@
           <div class="m-f"><button class="btn" data-close>Huỷ</button><button class="btn ok" id="ok">${ic('check')} Quyết toán</button></div></div>`, (layer, close) => {
           $('#ok', layer).onclick = () => {
             let pc = null;
-            if (st.balance < 0) pc = Store.insert('payment_voucher', { code: Store.nextCode('payment_voucher', 'PC'), driver_id: r.driver_id || '', vehicle_id: r.vehicle_id || '', date: U.today(), amount: -st.balance, method: 'Tiền mặt', route_id: r.id, note: 'Quyết toán chuyến ' + r.code });
+            if (st.balance < 0) pc = Store.insert('payment_voucher', { code: Store.nextCode('payment_voucher', 'PC'), driver_id: r.driver_id || '', vehicle_id: r.vehicle_id || '', date: U.today(), amount: -st.balance, method: 'Tiền mặt', kind: 'Thanh toán chi phí', route_id: r.id, note: 'Quyết toán chuyến ' + r.code });
             st.reqs.forEach(c => Store.update('cost_request', c.id, { status: 'Đã chi', paid_at: U.today(), voucher_id: pc ? pc.id : '', note: 'Quyết toán chuyến ' + r.code }));
             st.fuels.forEach(f => Store.update('route_fuel', f.id, { pay_status: 'Đã thanh toán' }));
             Store.update('route', r.id, { settle: 'Đã quyết toán', settle_amount: st.balance, settled_at: U.today() });
@@ -710,7 +713,28 @@
           };
         });
       }
-    },    confirmRevenue: {
+    },    settleAdvance: {
+      show: r => r.kind === 'Tạm ứng cho tài xế' && r.adv_status !== 'Đã quyết toán', icon: () => 'cash', label: () => 'Quyết toán tạm ứng',
+      run(r, draw) {
+        if (!canApprove()) return alert('Chỉ Kế toán / Quản trị viên được quyết toán tạm ứng.');
+        const u = Store.advanceUse(r); const line = (t, v) => `<div>${t}</div><div>${v}</div>`;
+        overlay(`<div class="modal sm"><div class="m-h"><h3>Quyết toán tạm ứng ${esc(r.code)}</h3><button class="btn ghost icon" data-close>${ic('x')}</button></div>
+          <div class="m-b"><div class="dl">${line('Tài xế', esc(Store.label('driver', r.driver_id)))}${line('Mục đích', esc(r.purpose || ''))}${line('Số tiền tạm ứng', U.money(r.amount) + ' đ')}
+          ${line('Đã dùng', `${U.money(u.used)} đ <span class="muted">(${u.reqs.length} đề nghị, ${u.fuels.length} lần đổ dầu)</span>`)}
+          ${line('Kết quả', `<b>${u.remain >= 0 ? `Tài xế hoàn lại ${U.money(u.remain)} đ` : `Công ty trả thêm ${U.money(-u.remain)} đ`}</b>`)}</div>
+          ${u.pending ? `<div class="err" style="margin-top:12px">Còn ${U.money(u.pending)} đ chi phí trừ tạm ứng đang chờ duyệt. Nên duyệt xong trước khi quyết toán.</div>` : ''}
+          ${u.remain < 0 ? '<div class="hint" style="margin-top:10px">Hệ thống tạo phiếu chi phần công ty trả thêm.</div>' : ''}</div>
+          <div class="m-f"><button class="btn" data-close>Huỷ</button><button class="btn ok" id="ok">${ic('check')} Quyết toán</button></div></div>`, (layer, close) => {
+          $('#ok', layer).onclick = () => {
+            let pc = null;
+            if (u.remain < 0) pc = Store.insert('payment_voucher', { code: Store.nextCode('payment_voucher', 'PC'), driver_id: r.driver_id || '', vehicle_id: r.vehicle_id || '', date: U.today(), amount: -u.remain, method: 'Tiền mặt', kind: 'Thanh toán chi phí', note: 'Quyết toán tạm ứng ' + r.code });
+            Store.update('payment_voucher', r.id, { adv_status: 'Đã quyết toán', adv_settled_at: U.today(), adv_return: Math.max(0, u.remain) });
+            close(); toast('Đã quyết toán ' + r.code + (pc ? ', tạo phiếu ' + pc.code : '')); draw && draw();
+          };
+        });
+      }
+    },
+    confirmRevenue: {
       show: r => r.status === 'Chờ xác nhận', icon: () => 'check', label: () => 'Xác nhận doanh thu',
       run(r, draw) {
         reviewModal('Xác nhận doanh thu', [['Mã', esc(r.code)], ['Xe', esc(Store.label('vehicle', r.vehicle_id))], ['Tài xế', esc(Store.label('driver', r.driver_id))], ['Khách hàng', esc(Store.label('customer', r.customer_id))], ['Loại', esc(r.type)], ['Số tiền', `<b>${U.money(r.amount)} đ</b>`], ['Hình thức thu', esc(r.collect)], ['Ghi chú', esc(r.note)]], r.image,
@@ -814,6 +838,7 @@
   };
   // Cảnh báo trước khi lưu (trả về câu hỏi xác nhận, rỗng = không cảnh báo)
   const BEFORE_SAVE = {
+    payment_voucher(r) { return r.kind === 'Tạm ứng cho tài xế' && !r.driver_id ? 'Phiếu tạm ứng chưa chọn tài xế nên tài xế sẽ không nhận được thông báo trên App.\nVẫn lưu?' : ''; },
     revenue(r, selfId) {
       const dup = Store.all('revenue').find(x => x.id !== selfId && x.status !== 'Từ chối' && (x.type || '') === (r.type || '') &&
         ((r.order_id && x.order_id === r.order_id) || (x.vehicle_id === r.vehicle_id && x.date === r.date && U.num(x.amount) === U.num(r.amount))));

@@ -100,7 +100,8 @@
   ]);
   def('route_fuel', 'Quản lý nhiên liệu', 'Vận hành', [
     f('code', 'Mã hệ thống', 'code', { prefix: 'NL' }),
-    f('pay_type', 'Loại TT', 'select', { options: ['Công ty thanh toán', 'Tự thanh toán'], def: 'Công ty thanh toán' }),
+    f('pay_type', 'Loại TT', 'select', { options: ['Công ty thanh toán', 'Tự thanh toán', 'Trừ vào tạm ứng'], def: 'Công ty thanh toán' }),
+    f('advance_id', 'Trừ vào phiếu tạm ứng', 'ref', { ref: 'payment_voucher', show: 'code', list: false }),
     f('pay_status', 'TT thanh toán', 'select', { options: ['Chưa thanh toán', 'Đã thanh toán', 'Thanh toán chưa đủ'], def: 'Chưa thanh toán', badge: true }),
     f('date', 'Ngày đổ nhiên liệu', 'date', { def: 'today' }),
     f('fuel_type', 'Loại nhiên liệu', 'select', { options: fuelTypes, def: fuelTypes[0] }),
@@ -133,7 +134,8 @@
     f('code', 'Mã đề nghị', 'code', { prefix: 'DN' }), f('date', 'Ngày phát sinh', 'date', { def: 'today', required: true }),
     refVehicle({ required: true }), refDriver(), f('route_id', 'Chuyến xe', 'ref', { ref: 'route', show: 'code' }),
     refCat(), f('amount', 'Số tiền', 'money', { required: true, sum: true }),
-    f('pay_method', 'Hình thức', 'select', { options: ['Tài xế ứng trước', 'Đề nghị tạm ứng', 'Công ty chi trực tiếp'], def: 'Tài xế ứng trước' }),
+    f('pay_method', 'Hình thức', 'select', { options: ['Tài xế ứng trước', 'Trừ vào tạm ứng', 'Đề nghị tạm ứng', 'Công ty chi trực tiếp'], def: 'Tài xế ứng trước' }),
+    f('advance_id', 'Trừ vào phiếu tạm ứng', 'ref', { ref: 'payment_voucher', show: 'code', list: false }),
     f('description', 'Nội dung', 'textarea', { required: true }),
     f('image', 'Ảnh chứng từ', 'image'),
     f('status', 'Trạng thái', 'select', { options: ['Chờ duyệt', 'Kế toán đã duyệt', 'Đã duyệt', 'Từ chối', 'Đã chi'], def: 'Chờ duyệt', badge: true, lock: true }),
@@ -162,10 +164,16 @@
     f('code', 'Mã', 'code', { prefix: 'PC' }), f('contractor_id', 'Nhà thầu', 'ref', { ref: 'contractor' }), refDriver(), refVehicle(),
     f('date', 'Ngày chi', 'date', { def: 'today' }), f('amount', 'Tổng tiền', 'money', { sum: true, required: true }),
     f('method', 'Hình thức', 'select', { options: ['Tiền mặt', 'Chuyển khoản'] }),
-    f('cost_request_id', 'Đề nghị chi phí', 'ref', { ref: 'cost_request', show: 'code', readonly: true }),
+    f('kind', 'Loại chi', 'select', { options: ['Tạm ứng cho tài xế', 'Thanh toán chi phí', 'Khác'], def: 'Tạm ứng cho tài xế', hint: 'Tạm ứng cho tài xế: tài xế được báo trên App, mỗi lần tài xế chi sẽ trừ dần vào phiếu này' }),
+    f('purpose', 'Mục đích', 'text', { hint: 'VD: Ứng tiền lấy rỗng, phí nâng hạ cảng…' }),
+    f('adv_used', 'Đã dùng', 'money', { sum: true, readonly: true, virtual: r => r.kind === 'Tạm ứng cho tài xế' ? Store.advanceUse(r).used : '' }),
+    f('adv_remain', 'Còn lại', 'money', { sum: true, readonly: true, virtual: r => r.kind === 'Tạm ứng cho tài xế' ? Store.advanceUse(r).remain : '' }),
+    f('adv_status', 'TT tạm ứng', 'select', { options: ['Đang sử dụng', 'Đã quyết toán'], badge: true, lock: true, list: false }),
+    f('adv_settled_at', 'Ngày quyết toán', 'date', { readonly: true, list: false }), f('adv_return', 'Tài xế hoàn lại', 'money', { readonly: true, list: false }),
+    f('cost_request_id', 'Đề nghị chi phí', 'ref', { ref: 'cost_request', show: 'code', readonly: true, list: false }),
     f('route_id', 'Quyết toán chuyến', 'ref', { ref: 'route', show: 'code', readonly: true, list: false }),
     f('note', 'Ghi chú')
-  ], { note: 'Phiếu chi được tạo tự động khi đánh dấu đề nghị chi phí "Đã chi" hoặc quyết toán chuyến công ty còn nợ tài xế.' });
+  ], { rowActions: ['settleAdvance'], note: 'Phiếu "Tạm ứng cho tài xế" được báo ngay trên App tài xế; chi phí, dầu tài xế nhập với hình thức "Trừ vào tạm ứng" sẽ trừ dần vào phiếu. Phiếu "Thanh toán chi phí" được tạo tự động khi đánh dấu đề nghị "Đã chi" hoặc khi quyết toán.' });
 
   /* ===== TÀI XẾ ===== */
   def('driver', 'Tài xế', 'Tài xế', [

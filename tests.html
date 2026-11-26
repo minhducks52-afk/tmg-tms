@@ -331,6 +331,35 @@
       ok(!D.errors.length, D.errors.join('\n'));
     });
 
+    await t('Phiếu chi tạm ứng: tài xế được báo, chi phí và dầu trừ dần, duyệt xong là "Đã chi", quyết toán', async () => {
+      await sleep(1100);
+      const pv = SA.insert('payment_voucher', { code: SA.nextCode('payment_voucher', 'PC'), driver_id: drv.id, vehicle_id: drv.vehicle_id, date: U.today(), amount: 1000000, method: 'Tiền mặt', kind: 'Tạm ứng cho tài xế', purpose: 'Lấy rỗng cảng' }, 'Kế toán');
+      await sleep(300);
+      ok(WD.document.querySelector('.nav .bd'), 'Tài xế không có thông báo phiếu tạm ứng');
+      const home = WD.document.body.innerText; ok(/Lấy rỗng cảng/.test(home) && /Tiền tạm ứng/.test(home), 'Trang chủ không hiện tạm ứng');
+      // Đề nghị chi phí trừ vào tạm ứng
+      dq('[data-qa="cost"]').click(); await sleep(30);
+      let f = dq('#sheet-root form'); eq(f.pm.value, 'Trừ vào tạm ứng', 'Mặc định trừ tạm ứng');
+      f.amt.value = '300.000'; f.desc.value = 'Phí nâng hạ'; f.requestSubmit(); await sleep(250);
+      const c = SD.all('cost_request').find(x => x.description === 'Phí nâng hạ');
+      eq([c.advance_id, c.pay_method, c.status], [pv.id, 'Trừ vào tạm ứng', 'Chờ duyệt']);
+      // Đổ dầu trừ vào tạm ứng
+      dq('[data-qa="fuel"]').click(); await sleep(30);
+      f = dq('#sheet-root form'); f.l.value = '10'; f.p.value = '20.000'; f.pt.value = 'Trừ vào tạm ứng'; f.requestSubmit(); await sleep(250);
+      const fu = SD.all('route_fuel').find(x => x.advance_id === pv.id); ok(fu && fu.total === 200000, 'Dầu chưa trừ tạm ứng');
+      await sleep(150);
+      eq(SA.advanceUse(SA.get('payment_voucher', pv.id)).remain, 500000, 'Còn lại sau 2 lần trừ');
+      // Văn phòng duyệt 2 cấp -> "Đã chi" thẳng, không tạo phiếu chi mới
+      WA.confirm = () => true; const nPV = SA.all('payment_voucher').length;
+      login('ketoan'); await openRec('cost_request', c.id); await clickAct('approveCost'); q3('#ap').click(); await sleep(60);
+      login('admin'); await openRec('cost_request', c.id); await clickAct('approveCost'); q3('#ap').click(); await sleep(60);
+      const c2 = SA.get('cost_request', c.id); eq([c2.status, c2.voucher_id], ['Đã chi', pv.id]); eq(SA.all('payment_voucher').length, nPV, 'Không được tạo phiếu chi lần 2');
+      // Quyết toán phiếu tạm ứng: tài xế hoàn lại 500.000
+      await openRec('payment_voucher', pv.id); await clickAct('settleAdvance'); q3('#ok').click(); await sleep(60);
+      const p2 = SA.get('payment_voucher', pv.id); eq([p2.adv_status, p2.adv_return], ['Đã quyết toán', 500000]);
+      ok(!A.errors.length && !D.errors.length, A.errors.concat(D.errors).join('\n'));
+    });
+
     await t('Sao lưu ra file rồi khôi phục sang máy khác: đủ dữ liệu và ảnh', async () => {
       const txt = await SA.exportJSON(); const blob = JSON.parse(txt);
       ok(Object.keys(blob.__files).length >= 4, 'File thiếu ảnh');
