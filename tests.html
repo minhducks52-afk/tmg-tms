@@ -337,9 +337,12 @@
       const R = { from: '2026-10-01', to: '2026-11-30' }, f0 = SA.finance(R);
       const cnt = () => ['vehicle', 'customer', 'order', 'revenue', 'cost_request', 'op_cost'].map(c => SA.all(c).length);
       const c0 = cnt();
-      const r1 = await I.apply(p, { vat: '8%' });
+      p.trips[1].plate = ''; // giả lập dòng file ghi số xe "0" -> gán cho xe được chọn
+      const r1 = await I.apply(p, { vat: '8%', fallbackPlate: '99Z-999.01' });
       eq([r1.trips, r1.skipped, r1.revenue, r1.lolo, r1.costs], [3, 0, 12062500, 3852000, 11500001], 'Kết quả nhập');
-      eq(cnt().map((x, i) => x - c0[i]), [2, 2, 3, 5, 2, 4], 'Số bản ghi tạo mới (xe, khách, đơn, doanh thu, chi phí chi hộ, chi phí tháng)');
+      eq(cnt().map((x, i) => x - c0[i]), [1, 2, 3, 5, 2, 2], 'Số bản ghi tạo mới (xe, khách, đơn, doanh thu, chi phí chi hộ, chi phí tháng)');
+      const o2 = SA.all('order').find(o => o.order_no === 'TSTU1000002');
+      eq(SA.label('vehicle', o2.vehicle_id, 'plate'), '99Z-999.01', 'Dòng thiếu số xe phải gán cho xe đã chọn'); ok(o2.note.includes('gán cho xe'), 'Ghi chú gán xe');
       const f1 = SA.finance(R);
       eq([f1.revenue - f0.revenue, f1.cost - f0.cost, f1.profit - f0.profit], [12062500 + 3852000, 3852000 + 11500001, 12062500 - 11500001], 'Tài chính sau khi nhập');
       const od = SA.all('order').find(o => o.order_no === 'TSTU1000001');
@@ -347,16 +350,16 @@
       const codes = SA.all('order').map(o => o.code); eq(new Set(codes).size, codes.length, 'Mã đơn hàng bị trùng');
       ok(SA.all('cost_request').filter(c => c.import_batch === 'TH-2026-10').every(c => c.status === 'Đã chi'), 'Chi hộ phải ở trạng thái Đã chi');
 
-      const r2 = await I.apply(p, { vat: '8%' });
+      const r2 = await I.apply(p, { vat: '8%', fallbackPlate: '99Z-999.01' });
       eq([r2.trips, r2.skipped, r2.costs], [0, 3, 0], 'Nhập lại lần 2 phải bỏ qua hết');
-      eq(cnt().map((x, i) => x - c0[i]), [2, 2, 3, 5, 2, 4], 'Nhập lại không tạo trùng');
+      eq(cnt().map((x, i) => x - c0[i]), [1, 2, 3, 5, 2, 2], 'Nhập lại không tạo trùng');
       eq(I.existing(p), 3);
 
       d3.querySelector('#modal-root').innerHTML = ''; WA.location.hash = '#/p/import_month'; await sleep(80);
       ok(d3.querySelector('[data-undo="TH-2026-10"]'), 'Trang nhập chưa hiện đợt đã nhập');
-      eq(I.undo('TH-2026-10'), 14, 'Số bản ghi được gỡ');
+      eq(I.undo('TH-2026-10'), 12, 'Số bản ghi được gỡ');
       const f2 = SA.finance(R); eq([f2.revenue, f2.cost], [f0.revenue, f0.cost], 'Gỡ xong tài chính phải về như cũ');
-      ok(SA.trash().filter(x => x.rec.import_batch === 'TH-2026-10').length === 14, 'Bản ghi gỡ phải nằm trong thùng rác');
+      ok(SA.trash().filter(x => x.rec.import_batch === 'TH-2026-10').length === 12, 'Bản ghi gỡ phải nằm trong thùng rác');
       ok(!A.errors.length, A.errors.join('\n'));
     });
 

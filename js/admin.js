@@ -1136,6 +1136,11 @@
       const ck = (got, want) => want == null ? '' : got === want ? chip('Khớp TOTAL', 'ok') : chip('Lệch ' + U.money(got - want), 'warn');
       const mLabel = ym => 'Tháng ' + +ym.slice(5) + '/' + ym.slice(0, 4);
       const bs = I.batches();
+      // Xe cho các dòng không ghi số xe: chọn trong các xe có trong file / đã có trong TMG (mặc định 50E-661.41 nếu có)
+      const trips = st.parsed ? st.parsed.flatMap(p => p.trips) : [], noPlate = trips.filter(t => !t.plate).length;
+      const pk = s => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, ''), plates = [];
+      trips.map(t => t.plate).concat(Store.all('vehicle').map(v => v.plate)).forEach(pl => { if (pl && !plates.some(x => pk(x) === pk(pl))) plates.push(pl); });
+      if (noPlate && st.fb == null) st.fb = plates.find(pl => pk(pl) === '50E66141') || plates[0] || '';
       el.innerHTML = head('Nhập bảng tổng hợp tháng', 'Đọc file Excel "Bảng tổng hợp tháng" (mỗi sheet một tháng: danh sách container + các khoản chi phí (1)…(9) cuối bảng) và đưa vào TMG.') + `<div class="stack">
         ${isFinal() ? '' : '<div class="card"><div class="card-b muted">Chỉ Quản trị viên được nhập bảng tổng hợp (vì dữ liệu nhập vào được tính là đã duyệt / đã chi).</div></div>'}
         <div class="card" ${isFinal() ? '' : 'hidden'}><div class="card-h"><h3>1. Chọn file</h3></div><div class="card-b">
@@ -1153,6 +1158,7 @@
             <td class="num ${rev - p.got.cost < 0 ? 'neg' : ''}">${U.money(rev - p.got.cost)}</td>
             <td style="white-space:normal;min-width:220px">${p.warn.length ? `<details><summary>${chip(p.warn.length + ' cảnh báo', 'warn')}</summary><small>${p.warn.map(esc).join('<br>')}</small></details>` : chip('Không có', 'ok')}</td></tr>`; }).join('')}
           </tbody></table>
+          ${noPlate ? `<div class="field" style="max-width:420px;margin-top:12px"><label>Dòng thiếu số xe (${noPlate} container) gán cho xe</label><select id="imfb"><option value="">— Để trống, bổ sung sau —</option>${plates.map(pl => `<option ${pl === st.fb ? 'selected' : ''}>${esc(pl)}</option>`).join('')}</select></div>` : ''}
           <p class="muted" style="margin:10px 0">"Lãi ước tính" = cước trước VAT − chi phí tháng (phí nâng/hạ chi hộ thu và chi bằng nhau nên không tính). Trong file gốc, lãi được tính trên cước <b>gồm</b> VAT nên sẽ cao hơn.</p>
           <button class="btn primary" id="imgo" ${st.busy ? 'disabled' : ''}>${ic('check')} Nhập các tháng đã chọn</button> <button class="btn" id="imx">Huỷ</button>
         </div></div>` : ''}
@@ -1172,17 +1178,18 @@
           const sheets = await I.readXlsx(await f.arrayBuffer());
           const parsed = sheets.map(I.parseSheet).filter(p => p && (p.trips.length || p.costs.length));
           if (!parsed.length) { alert('Không tìm thấy bảng tổng hợp trong file (cần có dòng tiêu đề chứa "Số Container").'); return; }
-          Object.assign(st, { parsed, file: f.name, done: null }); redraw();
+          Object.assign(st, { parsed, file: f.name, done: null, fb: null }); redraw();
         } catch (err) { alert('Không đọc được file: ' + err.message); }
       };
       if (st.parsed) {
         $('#imx', el).onclick = () => { st.parsed = null; redraw(); };
+        if ($('#imfb', el)) $('#imfb', el).onchange = e => { st.fb = e.target.value; };
         $('#imgo', el).onclick = async () => {
           const pick = $$('[data-pi]', el).filter(c => c.checked).map(c => st.parsed[+c.dataset.pi]);
           if (!pick.length) { alert('Chưa chọn tháng nào'); return; }
           if (!confirm(`Nhập ${pick.length} tháng (${pick.map(p => mLabel(p.ym)).join(', ')}) vào TMG?`)) return;
           st.busy = true; redraw(); const done = [];
-          try { for (const p of pick) done.push(await I.apply(p, { vat: st.vat })); toast('Đã nhập ' + done.length + ' tháng'); }
+          try { for (const p of pick) done.push(await I.apply(p, { vat: st.vat, fallbackPlate: noPlate ? st.fb : '' })); toast('Đã nhập ' + done.length + ' tháng'); }
           catch (err) { alert('Lỗi khi nhập: ' + err.message + (done.length ? `\nĐã nhập xong: ${done.map(r => mLabel(r.ym)).join(', ')}` : '')); }
           Object.assign(st, { busy: false, parsed: null, done }); redraw();
         };

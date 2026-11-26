@@ -119,7 +119,7 @@
         note: [!qIsMove && q ? 'Thanh toán: ' + q : '', ...Object.keys(r).filter(k => !known.has(k) && k !== 'A').map(k => txt(r[k]))].filter(Boolean).join(' · ')
       };
       if (!t.date) warn.push(`Dòng ${n} (${t.cont}): thiếu ngày vận chuyển`);
-      if (!t.plate) warn.push(`Dòng ${n} (${t.cont}): thiếu số xe${C.plate && r[C.plate] != null ? ` (ghi "${txt(r[C.plate])}")` : ''} — nhập vào nhưng chưa gắn xe, cần bổ sung sau`);
+      if (!t.plate) warn.push(`Dòng ${n} (${t.cont}): thiếu số xe${C.plate && r[C.plate] != null ? ` (ghi "${txt(r[C.plate])}")` : ''} — gán cho xe chọn ở ô "Dòng thiếu số xe"`);
       if (!t.freight) warn.push(`Dòng ${n} (${t.cont}): chưa có cước`);
       trips.push(t);
     }
@@ -187,7 +187,9 @@
     const res = { sheet: p.name, ym: p.ym, trips: 0, skipped: 0, revenue: 0, lolo: 0, costs: 0 };
     p.trips.forEach(t => {
       const key = tripKey(p.ym, t); if (have.has(key)) { res.skipped++; return; } have.add(key);
-      const vehicle_id = veh(t.plate), customer_id = cust(t.cust), date = t.date || p.ym + '-01';
+      const fb = !t.plate && o.fallbackPlate; // dòng thiếu số xe -> gán cho xe được chọn
+      const vehicle_id = veh(t.plate || o.fallbackPlate || ''), customer_id = cust(t.cust), date = t.date || p.ym + '-01';
+      if (fb) t.note = [t.note, `File không ghi số xe, gán cho xe ${o.fallbackPlate}`].filter(Boolean).join(' · ');
       const amt = rate ? Math.round(t.freight / (1 + rate)) : t.freight;
       const od = mk('order', {
         status: 'Hoàn thành', order_no: t.cont, customer_id, vehicle_id, pickup_location: loc(t.pick), drop_location: loc(t.drop), pickup_date: date, drop_date: date,
@@ -206,7 +208,7 @@
       res.trips++;
     });
     // Chi phí tháng: phân bổ cho các xe theo số chuyến trong tháng (xe thuê ngoài chạy 1-2 chuyến chỉ gánh phần nhỏ)
-    const tc = {}; p.trips.forEach(t => { const v = veh(t.plate); if (v) tc[v] = (tc[v] || 0) + 1; });
+    const tc = {}; p.trips.forEach(t => { const v = veh(t.plate || o.fallbackPlate || ''); if (v) tc[v] = (tc[v] || 0) + 1; });
     let vids = Object.keys(tc).sort((a, b) => tc[b] - tc[a]);
     if (!vids.length) { const v0 = S.all('vehicle')[0]; if (v0) { vids = [v0.id]; tc[v0.id] = 1; } }
     const nT = vids.reduce((s, v) => s + tc[v], 0);
