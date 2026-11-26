@@ -126,7 +126,7 @@
   /* ===== TÀI CHÍNH ===== */
   def('revenue', 'Nhập doanh thu', 'Tài chính', [
     f('code', 'Mã phiếu', 'code', { prefix: 'DT' }), f('date', 'Ngày', 'date', { def: 'today', required: true }),
-    f('type', 'Loại doanh thu', 'select', { options: ['Cước vận chuyển', 'Phụ phí', 'Bốc xếp', 'Lưu ca / lưu đêm', 'Thu chi hộ (nâng/hạ)', 'Doanh thu khác'], def: 'Cước vận chuyển' }),
+    f('type', 'Loại doanh thu', 'select', { options: ['Cước vận chuyển', 'Phụ phí', 'Bốc xếp', 'Lưu ca / lưu đêm', 'Doanh thu khác'], def: 'Cước vận chuyển' }),
     refVehicle({ required: true }), refDriver(), refCustomer(),
     f('order_id', 'Đơn hàng', 'ref', { ref: 'order', show: 'order_no', list: false }),
     f('route_id', 'Chuyến xe', 'ref', { ref: 'route', show: 'code' }),
@@ -135,9 +135,38 @@
     f('total', 'Tổng sau VAT', 'money', { sum: true, readonly: true, calc: r => U.num(r.amount) + Math.round(U.num(r.amount) * vatRate(r.vat)) }),
     f('collect', 'Hình thức thu', 'select', { options: ['Công nợ', 'Tài xế thu tiền mặt', 'Chuyển khoản'], def: 'Công nợ' }),
     f('status', 'Trạng thái', 'select', { options: ['Chờ xác nhận', 'Đã xác nhận', 'Từ chối'], def: 'Đã xác nhận', badge: true }),
+    f('invoice_ref', 'Số hóa đơn', 'text'),
+    f('pay_state', 'Khách thanh toán', 'text', { readonly: true, badge: true, virtual: r => r.collect !== 'Công nợ' || r.status !== 'Đã xác nhận' ? '' : (Store.receivables().byKey.get('revenue|' + r.id) || {}).status || '' }),
+    f('debt_remain', 'Còn phải thu', 'money', { readonly: true, sum: true, list: false, virtual: r => { const x = Store.receivables().byKey.get('revenue|' + r.id); return x ? x.remain : 0; } }),
     f('source', 'Nguồn', 'select', { options: ['Web', 'App'], def: 'Web' }),
     f('image', 'Chứng từ', 'image', { list: false }), f('note', 'Ghi chú', 'textarea', { list: false })
-  ], { rowActions: ['confirmRevenue'], note: 'Chỉ doanh thu "Đã xác nhận" được tính vào báo cáo. Doanh thu do tài xế nhập trên App ở trạng thái "Chờ xác nhận".' });
+  ], { rowActions: ['confirmRevenue'], note: 'Chỉ doanh thu "Đã xác nhận" được tính vào báo cáo. Doanh thu tính theo cước GỒM VAT (đổi trong Thiết lập công ty). Phí nâng/hạ trả hộ khách nhập ở mục "Chi hộ", không nhập ở đây.' });
+
+  // Chi hộ: tiền công ty trả hộ khách (nâng/hạ, cược cont…) — khách thanh toán lại; KHÔNG tính vào doanh thu / lãi
+  def('chi_ho', 'Chi hộ (nâng/hạ)', 'Tài chính', [
+    f('code', 'Mã', 'code', { prefix: 'CH' }), f('date', 'Ngày', 'date', { def: 'today', required: true }),
+    refCustomer({ required: true }), refVehicle(),
+    f('order_id', 'Đơn hàng', 'ref', { ref: 'order', show: 'order_no', list: false }),
+    f('cont_no', 'Số container'),
+    f('kind', 'Loại chi hộ', 'select', { options: ['Nâng + hạ', 'Phí nâng', 'Phí hạ', 'Cược cont', 'Phí khác'], def: 'Nâng + hạ' }),
+    f('lift', 'Phí nâng', 'money', { list: false }), f('drop', 'Phí hạ', 'money', { list: false }), f('deposit', 'Cược / phí khác', 'money', { list: false }),
+    f('amount', 'Số tiền chi hộ', 'money', { required: true, sum: true, hint: 'Để trống thì tự cộng phí nâng + hạ + cược', calc: r => U.num(r.lift) + U.num(r.drop) + U.num(r.deposit) || U.num(r.amount) }),
+    f('invoice_ref', 'Số hóa đơn', 'text'),
+    f('paid', 'Khách đã trả', 'money', { readonly: true, sum: true, virtual: r => Store.paidOf('chi_ho', r.id) }),
+    f('remain', 'Còn phải thu', 'money', { readonly: true, sum: true, virtual: r => { const x = Store.receivables().byKey.get('chi_ho|' + r.id); return x ? x.remain : U.num(r.amount); } }),
+    f('pay_state', 'Khách thanh toán', 'text', { readonly: true, badge: true, virtual: r => (Store.receivables().byKey.get('chi_ho|' + r.id) || {}).status || '' }),
+    f('note', 'Ghi chú', 'textarea', { list: false })
+  ], { note: 'Tiền công ty trả hộ khách (nâng/hạ, cược…). Không tính vào doanh thu, chi phí, lãi lỗ; khách thanh toán lại cùng hóa đơn. Theo dõi tại "Công nợ & thanh toán".' });
+
+  // Khách thanh toán: nhập số tiền (tự trừ khoản cũ nhất) hoặc chọn hóa đơn / chi hộ cụ thể trên trang "Công nợ & thanh toán"
+  def('customer_payment', 'Khách thanh toán', 'Tài chính', [
+    f('code', 'Mã', 'code', { prefix: 'TT' }), f('date', 'Ngày thanh toán', 'date', { def: 'today', required: true }),
+    refCustomer({ required: true }), f('amount', 'Số tiền', 'money', { required: true, sum: true }),
+    f('method', 'Hình thức', 'select', { options: ['Chuyển khoản', 'Tiền mặt', 'Bù trừ'], def: 'Chuyển khoản' }),
+    f('applied', 'Đã trừ vào', 'text', { readonly: true, list: false, virtual: r => { const p = Store.receivables().payInfo[r.id]; if (!p) return ''; const g = {}; p.used.forEach(u => { const x = Store.receivables().byKey.get(u.t + '|' + u.id); const k = (x && x.inv ? 'HĐ ' + x.inv : 'Chưa có số HĐ') + (u.t === 'chi_ho' ? ' (chi hộ)' : ' (cước)'); g[k] = (g[k] || 0) + u.a; }); return Object.entries(g).map(([k, v]) => k + ': ' + U.money(v)).join('; '); } }),
+    f('left', 'Tiền dư chưa trừ', 'money', { readonly: true, sum: true, virtual: r => { const p = Store.receivables().payInfo[r.id]; return p ? p.left : U.num(r.amount); } }),
+    f('note', 'Ghi chú', 'textarea', { list: false })
+  ], { note: 'Nhập số tiền khách trả: hệ thống tự trừ vào cước / chi hộ CŨ NHẤT của khách. Muốn trừ đúng hóa đơn nào, dùng nút "Ghi nhận thanh toán" trên trang Công nợ & thanh toán.' });
 
   def('cost_request', 'Đề nghị chi phí', 'Tài chính', [
     f('code', 'Mã đề nghị', 'code', { prefix: 'DN' }), f('date', 'Ngày phát sinh', 'date', { def: 'today', required: true }),
@@ -299,7 +328,7 @@
     { id: 'dashboard', title: 'Tổng quan', icon: 'home', page: 'dashboard' },
     { title: 'Đơn hàng', icon: 'doc', items: ['order', 'order_customer', 'invoice', 'document'] },
     { title: 'Vận hành', icon: 'truck', items: ['route', 'shipping_order', 'road', 'road_schedule', 'route_fuel', { id: 'board', title: 'Bảng điều vận', page: 'board' }] },
-    { title: 'Doanh thu & Chi phí', icon: 'money', items: ['revenue', 'cost_request', 'op_cost', 'receipt_voucher', 'payment_voucher', { id: 'import_month', title: 'Nhập bảng tổng hợp tháng (Excel)', page: 'importMonth' }] },
+    { title: 'Doanh thu & Chi phí', icon: 'money', items: ['revenue', 'chi_ho', { id: 'receivable', title: 'Công nợ & thanh toán', page: 'receivable' }, 'customer_payment', 'cost_request', 'op_cost', 'receipt_voucher', 'payment_voucher', { id: 'import_month', title: 'Nhập bảng tổng hợp tháng (Excel)', page: 'importMonth' }] },
     { title: 'Báo cáo', icon: 'chart', items: [{ id: 'rpt_vehicle', title: 'Lãi lỗ theo đầu xe', page: 'rptVehicle' }, { id: 'rpt_month', title: 'Doanh thu - chi phí theo tháng', page: 'rptMonth' }, { id: 'rpt_cat', title: 'Chi phí theo khoản mục', page: 'rptCat' }, { id: 'rpt_trip', title: 'Lãi lỗ theo chuyến', page: 'rptTrip' }, { id: 'rpt_fuel', title: 'Dầu: định mức và thực tế', page: 'rptFuel' }, { id: 'rpt_debt', title: 'Công nợ khách hàng', page: 'rptDebt' }, { id: 'rpt_settle', title: 'Quyết toán tạm ứng tài xế', page: 'rptSettle' }, { id: 'rpt_expiry', title: 'Cảnh báo hạn giấy tờ', page: 'rptExpiry' }] },
     { title: 'Tài xế', icon: 'user', items: ['driver', 'vehicle_team', 'advance_salary', 'time_sheet', 'salary', 'contract_salary', 'incident'] },
     { title: 'Xe', icon: 'car', items: ['vehicle', 'vehicle_group', 'contractor', 'trailer', 'container', 'repair_ticket', 'accessory', 'vehicle_tire', 'assets'] },

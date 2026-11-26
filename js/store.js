@@ -558,7 +558,9 @@
     const inRange = d => { const x = String(d || '').slice(0, 10); return (!from || x >= from) && (!to || x <= to); };
     const vOk = v => !vehicle || v === vehicle;
     const rows = [];
-    Store.all('revenue').forEach(r => { if (r.status !== 'Đã xác nhận' || !inRange(r.date) || !vOk(r.vehicle_id)) return; rows.push({ kind: 'rev', vehicle: r.vehicle_id, date: r.date, cat: r.type || 'Cước vận chuyển', amount: U.num(r.amount) }); });
+    Store.all('revenue').forEach(r => { if (r.status !== 'Đã xác nhận' || !inRange(r.date) || !vOk(r.vehicle_id)) return; rows.push({ kind: 'rev', vehicle: r.vehicle_id, date: r.date, cat: r.type || 'Cước vận chuyển', amount: Store.revValue(r) }); });
+    // Chi hộ khách (nâng/hạ, cược…): theo dõi riêng, KHÔNG tính vào doanh thu / chi phí / lãi
+    Store.all('chi_ho').forEach(r => { if (!inRange(r.date) || !vOk(r.vehicle_id)) return; rows.push({ kind: 'chiho', vehicle: r.vehicle_id, date: r.date, cat: r.kind || 'Chi hộ', amount: U.num(r.amount) }); });
     Store.all('cost_request').forEach(r => { if (!['Đã duyệt', 'Đã chi'].includes(r.status) || !inRange(r.date) || !vOk(r.vehicle_id)) return; rows.push({ kind: 'cost', src: 'Đề nghị chi phí', vehicle: r.vehicle_id, date: r.date, cat: Store.label('cost_category', r.category_id) || 'Khác', amount: U.num(r.amount) }); });
     // Chi phí vận hành kỳ Quý / Năm: chia đều 3 / 12 tháng kể từ tháng hạch toán (phần lẻ dồn vào tháng cuối)
     Store.all('op_cost').forEach(r => {
@@ -575,8 +577,43 @@
     Store.all('repair_ticket').forEach(r => { if (r.approved !== 'Có' || !inRange(r.start_date) || !vOk(r.vehicle_id)) return; rows.push({ kind: 'cost', src: 'Sửa chữa', vehicle: r.vehicle_id, date: r.start_date, cat: 'Sửa chữa, bảo dưỡng', amount: U.num(r.total) }); });
     const revenue = rows.filter(r => r.kind === 'rev').reduce((s, r) => s + r.amount, 0);
     const cost = rows.filter(r => r.kind === 'cost').reduce((s, r) => s + r.amount, 0);
-    return { rows, revenue, cost, profit: revenue - cost };
+    const chiho = rows.filter(r => r.kind === 'chiho').reduce((s, r) => s + r.amount, 0);
+    return { rows, revenue, cost, chiho, profit: revenue - cost };
   };
+
+  /* ---- Doanh thu tính theo cước GỒM VAT (mặc định) hoặc TRƯỚC VAT — chọn trong Thiết lập công ty ---- */
+  Store.revBasis = () => Store.settings().rev_basis || 'Gồm VAT';
+  Store.revValue = function (r) {
+    const a = U.num(r.amount); if (Store.revBasis() === 'Trước VAT') return a;
+    return U.num(r.total) || a + Math.round(a * (global.TMG_vatRate ? global.TMG_vatRate(r.vat) : 0));
+  };
+
+  /* ---- Công nợ khách: cước (doanh thu công nợ, gồm VAT) + chi hộ − khách thanh toán ----
+     Mỗi lần thanh toán: trừ trước vào các khoản được chọn (alloc), phần còn lại tự trừ vào khoản CŨ NHẤT của khách. */
+  let recMemo = null;
+  Store.receivables = function () {
+    const R = Store.all('revenue'), C = Store.all('chi_ho'), P = Store.all('customer_payment');
+    if (recMemo && recMemo.R === R && recMemo.C === C && recMemo.P === P) return recMemo.out;
+    const vr = global.TMG_vatRate || (() => 0);
+    const items = [];
+    R.forEach(r => { if (r.status !== 'Đã xác nhận' || r.collect !== 'Công nợ' || !r.customer_id) return; const a = U.num(r.amount); items.push({ t: 'revenue', id: r.id, rec: r, customer: r.customer_id, date: r.date || '', inv: r.invoice_ref || '', order: r.order_id || '', due: U.num(r.total) || a + Math.round(a * vr(r.vat)), paid: 0 }); });
+    C.forEach(r => { if (!r.customer_id) return; items.push({ t: 'chi_ho', id: r.id, rec: r, customer: r.customer_id, date: r.date || '', inv: r.invoice_ref || '', order: r.order_id || '', due: U.num(r.amount), paid: 0 }); });
+    items.sort((a, b) => a.date.localeCompare(b.date) || a.inv.localeCompare(b.inv) || (a.t === b.t ? 0 : a.t === 'revenue' ? -1 : 1));
+    const byKey = new Map(items.map(x => [x.t + '|' + x.id, x]));
+    const pays = P.slice().sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')) || String(a.created_at || '').localeCompare(String(b.created_at || '')));
+    const payInfo = {};
+    pays.forEach(p => {
+      let left = U.num(p.amount); const used = [];
+      const take = (x, want) => { const n = Math.max(0, Math.min(left, x.due - x.paid, want)); if (n > 0) { x.paid += n; left -= n; used.push({ t: x.t, id: x.id, a: n }); } };
+      (p.alloc || []).forEach(a => { const x = byKey.get(a.t + '|' + a.id); if (x && x.customer === p.customer_id) take(x, U.num(a.a) || Infinity); });
+      if (p.auto !== 'Không') items.forEach(x => { if (left > 0 && x.customer === p.customer_id) take(x, Infinity); });
+      payInfo[p.id] = { used, left };
+    });
+    items.forEach(x => { x.remain = x.due - x.paid; x.status = x.remain <= 0 ? 'Đã thanh toán' : x.paid > 0 ? 'Thanh toán một phần' : 'Chưa thanh toán'; });
+    const out = { items, byKey, payInfo };
+    recMemo = { R, C, P, out }; return out;
+  };
+  Store.paidOf = (t, id) => { const x = Store.receivables().byKey.get(t + '|' + id); return x ? x.paid : 0; };
 
   /* ---- Phiếu chi tạm ứng cho tài xế: trừ dần theo chi phí / dầu tài xế nhập "Trừ vào tạm ứng" ---- */
   Store.advanceUse = function (pv) {

@@ -107,15 +107,17 @@
       if (cm) { costs.push({ row: n, no: +cm[1], label: cm[2], amount: money(r[C.freight]), note: Object.keys(r).filter(k => k !== 'A' && k !== C.freight && typeof r[k] === 'string' && !/cần xử lý|ghi chú|nhận xét/i.test(r[k])).map(k => txt(r[k])).join(' ') }); continue; }
       if (total || !isCont(r[C.cont])) continue;
       const inv = C.inv ? txt(r[C.inv]) : '', tot = C.total ? money(r[C.total]) : 0, cu = C.cust ? txt(r[C.cust]) : '';
-      if (inv || tot || cu) last = { inv, cust: cu || last.cust };
       const q = C.q ? txt(r[C.q]) : '', place = C.place ? txt(r[C.place]) : '';
+      const paidTxt = !qIsMove && q ? /đã thanh toán|đã tt\b/i.test(q) && !/chưa/i.test(q) : null; // cột "thanh toán" (file cũ)
+      if (inv || tot || cu) last = { inv, cust: cu || last.cust, paid: !!paidTxt };
+      else if (paidTxt != null) last.paid = paidTxt;
       const mv = qIsMove && /xuất/i.test(q) ? 'Xuất' : qIsMove && /nhập/i.test(q) ? 'Nhập' : (qIsMove && /rỗng/i.test(q)) || /trả rỗng|lấy rỗng/i.test(place) ? 'Rỗng' : '';
       const sz = Object.keys(sizes).find(k => r[k] != null && r[k] !== '');
       const t = {
         row: n, cont: txt(r[C.cont]).replace(/\s+/g, '').toUpperCase(), booking: C.booking ? txt(r[C.booking]) : '', plate: /[a-z]/i.test(txt(r[C.plate])) ? txt(r[C.plate]) : '', date: toDate(r[C.date]),
         size: sz ? sizes[sz] : '', pick: C.pick ? txt(r[C.pick]) : '', place, drop: C.drop ? txt(r[C.drop]) : '',
         lift: C.lolo ? money(r[C.lolo]) : 0, dropFee: lolo2 ? money(r[lolo2]) : 0, dep: C.dep ? money(r[C.dep]) : 0, freight: money(r[C.freight]),
-        inv: inv || last.inv, cust: cu || last.cust, move: mv,
+        inv: inv || last.inv, cust: cu || last.cust, move: mv, paid: paidTxt != null ? paidTxt : !!last.paid,
         note: [!qIsMove && q ? 'Thanh toán: ' + q : '', ...Object.keys(r).filter(k => !known.has(k) && k !== 'A').map(k => txt(r[k]))].filter(Boolean).join(' · ')
       };
       if (!t.date) warn.push(`Dòng ${n} (${t.cont}): thiếu ngày vận chuyển`);
@@ -151,11 +153,10 @@
     [/sửa xe|sửa chữa/, 'Sửa chữa, bảo dưỡng', 'Chi phí cố định (theo xe)'], [/bảo hiểm/, 'Bảo hiểm xe', 'Chi phí cố định (theo xe)'],
     [/dầu|nhiên liệu/, 'Nhiên liệu', 'Chi phí biến đổi (theo chuyến)'], [/kế toán/, 'Phí kế toán dịch vụ', 'Chi phí khác'], [/khác/, 'Chi phí khác', 'Chi phí khác']
   ];
-  const LOLO_CAT = ['Phí nâng hạ (chi hộ)', 'Chi phí biến đổi (theo chuyến)'];
   const nameKey = s => low(s).replace(/[.,]/g, '');
   const plateKey = s => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   const tripKey = (ym, t) => `${ym}|${t.cont}|${t.date}|${plateKey(t.plate)}`;
-  const BATCH_COLS = ['order', 'revenue', 'cost_request', 'op_cost'];
+  const BATCH_COLS = ['order', 'revenue', 'chi_ho', 'customer_payment', 'cost_request', 'op_cost']; // cost_request: đợt nhập bản cũ
   const batchOf = ym => 'TH-' + ym;
 
   // Số chuyến trong sheet đã có sẵn trong TMG (đã nhập trước đó)
@@ -167,7 +168,7 @@
   async function apply(p, opts) {
     const S = global.Store, U = global.U, o = opts || {};
     const vat = o.vat || '8%', rate = global.TMG_vatRate(vat), user = o.user || S.userName(), batch = batchOf(p.ym);
-    const add = { vehicle: [], customer: [], location: [], cost_category: [], order: [], revenue: [], cost_request: [], op_cost: [] }, pre = {};
+    const add = { vehicle: [], customer: [], location: [], cost_category: [], order: [], revenue: [], chi_ho: [], op_cost: [], customer_payment: [] }, pre = {}, paidGroups = {};
     const mk = (c, rec, prefix) => { const r = Object.assign({ id: U.uid() }, rec); if (prefix) pre[c] = prefix; add[c].push(r); return r; };
     // Danh mục: tìm theo tên / biển số, chưa có thì tạo
     const vmap = new Map(S.all('vehicle').map(v => [plateKey(v.plate), v.id]));
@@ -196,16 +197,23 @@
         freight: amt, extra_fee: 0, vat, revenue: amt, booking: t.booking, cont_size: t.size, move_type: t.move, stuff_place: t.place,
         lift_fee: t.lift, drop_fee: t.dropFee, deposit: t.dep, invoice_ref: t.inv, note: t.note, import_key: key, import_batch: batch
       }, 'DH');
-      const base = { date, vehicle_id, customer_id, order_id: od.id, collect: 'Công nợ', status: 'Đã xác nhận', source: 'Web', import_key: key, import_batch: batch };
-      if (t.freight) { mk('revenue', Object.assign({ type: 'Cước vận chuyển', amount: amt, vat, total: amt + Math.round(amt * rate), note: `Cont ${t.cont}${t.inv ? ' · HĐ số ' + t.inv : ''}` }, base), 'DT'); res.revenue += amt; }
-      const lolo = t.lift + t.dropFee;
+      const made = [];
+      // Doanh thu = tiền cước (gồm VAT; lưu cả phần trước VAT)
+      if (t.freight) { made.push(mk('revenue', { type: 'Cước vận chuyển', date, vehicle_id, customer_id, order_id: od.id, amount: amt, vat, total: t.freight, invoice_ref: t.inv, collect: 'Công nợ', status: 'Đã xác nhận', source: 'Web', note: `Cont ${t.cont}`, import_key: key, import_batch: batch }, 'DT')); res.revenue += t.freight; }
+      // Chi hộ (nâng/hạ + cược): mục riêng, khách trả lại, không tính vào doanh thu / lãi
+      const lolo = t.lift + t.dropFee + t.dep;
       if (lolo) {
-        const d = `Chi hộ nâng ${U.money(t.lift)} + hạ ${U.money(t.dropFee)} · cont ${t.cont}`;
-        mk('revenue', Object.assign({ type: 'Thu chi hộ (nâng/hạ)', amount: lolo, vat: 'Không chịu thuế', total: lolo, note: d }, base), 'DT');
-        mk('cost_request', { date, vehicle_id, category_id: cat(LOLO_CAT[0], LOLO_CAT[1]), amount: lolo, pay_method: 'Công ty chi trực tiếp', description: d, status: 'Đã chi', approver: user, approved_at: U.now(), paid_at: date, source: 'Web', import_key: key, import_batch: batch }, 'DN');
+        made.push(mk('chi_ho', { date, customer_id, vehicle_id, order_id: od.id, cont_no: t.cont, kind: t.lift && t.dropFee ? 'Nâng + hạ' : t.lift ? 'Phí nâng' : t.dropFee ? 'Phí hạ' : 'Cược cont', lift: t.lift, drop: t.dropFee, deposit: t.dep, amount: lolo, invoice_ref: t.inv, note: t.dep ? 'Gồm cược ' + U.money(t.dep) + ' đ' : '', import_key: key, import_batch: batch }, 'CH'));
         res.lolo += lolo;
       }
+      if (t.paid) { const gk = customer_id + '|' + (t.inv || ''); (paidGroups[gk] = paidGroups[gk] || { customer_id, inv: t.inv, recs: [] }).recs.push(...made); }
       res.trips++;
+    });
+    // File ghi "ĐÃ THANH TOÁN": tạo 1 lần khách thanh toán cho mỗi hóa đơn, trừ đúng các khoản của hóa đơn đó
+    Object.values(paidGroups).forEach(g => {
+      const amount = g.recs.reduce((s, r) => s + U.num(r.total != null && r.type ? r.total : r.amount), 0); if (!amount) return;
+      mk('customer_payment', { date: U.monthEnd(p.ym), customer_id: g.customer_id, amount, method: 'Chuyển khoản', note: `Theo file tổng hợp ${p.name}: ĐÃ THANH TOÁN${g.inv ? ' HĐ ' + g.inv : ''}`, alloc: g.recs.map(r => ({ t: r.type ? 'revenue' : 'chi_ho', id: r.id, a: U.num(r.type ? r.total : r.amount) })), import_batch: batch }, 'TT');
+      res.paid = (res.paid || 0) + amount;
     });
     // Chi phí tháng: phân bổ cho các xe theo số chuyến trong tháng (xe thuê ngoài chạy 1-2 chuyến chỉ gánh phần nhỏ)
     const tc = {}; p.trips.forEach(t => { const v = veh(t.plate || o.fallbackPlate || ''); if (v) tc[v] = (tc[v] || 0) + 1; });

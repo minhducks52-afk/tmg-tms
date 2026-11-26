@@ -46,14 +46,21 @@ Không cần cài đặt, không cần máy chủ: HTML/CSS/JavaScript thuần, 
 - **Chi phí vận hành kỳ Quý / Năm** được chia đều 3 / 12 tháng.
 - **Cảnh báo trùng doanh thu** (cùng đơn hàng, hoặc cùng xe + ngày + số tiền).
 
+## Doanh thu, chi hộ và công nợ khách
+- **Doanh thu = tiền cước gồm VAT** (đổi sang "Trước VAT" tại *Thiết lập công ty*). Áp dụng cho Tổng quan, lãi lỗ, biểu đồ.
+- **Chi hộ (nâng/hạ)**: mục riêng cho tiền công ty trả hộ khách (nâng, hạ, cược cont…). Khách trả lại; **không** tính vào doanh thu, chi phí, lãi.
+- **Khách thanh toán**: chỉ nhập số tiền thì tự trừ vào cước / chi hộ **cũ nhất**; hoặc trên trang *Công nợ & thanh toán* bấm "Thu tiền" ở hóa đơn / tick hóa đơn cần trừ. Trả dư được giữ lại và tự trừ khi phát sinh nợ mới.
+- **Công nợ & thanh toán**: còn phải thu theo từng hóa đơn (số HĐ) và từng tháng, tách cước và chi hộ; lọc theo khách / tháng / trạng thái; biểu đồ; xuất Excel.
+- **Tổng quan**: chọn tháng bất kỳ; thêm số chi hộ, cước / chi hộ khách còn nợ và biểu đồ.
+
 ## Nhập bảng tổng hợp tháng (Excel)
 Menu *Doanh thu & Chi phí → Nhập bảng tổng hợp tháng (Excel)* (chỉ Quản trị viên). Đọc file .xlsx dạng "BẢNG TỔNG HỢP THÁNG" (mỗi sheet một tháng), đọc ngay trên trình duyệt, không gửi file đi đâu.
-- Mỗi dòng container → **Đơn hàng** (Hoàn thành, kèm booking, loại cont, xuất/nhập/rỗng, phí nâng/hạ, số HĐ) + **Doanh thu cước** (tách VAT từ cột "CƯỚC gồm VAT").
-- Phí nâng/hạ (LOLO) → **Thu chi hộ** + **Chi phí chi hộ** bằng nhau: không đổi lãi, nhưng vào công nợ khách (khớp cột "Tổng tiền cước + chi hộ").
+- Mỗi dòng container → **Đơn hàng** (Hoàn thành, kèm booking, loại cont, xuất/nhập/rỗng, phí nâng/hạ, số HĐ) + **Doanh thu cước** (gồm VAT, kèm số HĐ).
+- Phí nâng/hạ (LOLO) + cược → mục **Chi hộ** (khớp cột "Tổng tiền cước + chi hộ"). Dòng ghi "ĐÃ THANH TOÁN" → tự tạo **Khách thanh toán** cho hóa đơn đó.
+- Dòng không ghi số xe → gán cho xe chọn trên màn hình kiểm tra (mặc định 50E-661.41).
 - Các khoản (1)…(9) cuối bảng → **Chi phí vận hành** của tháng, phân bổ cho các xe theo số chuyến.
 - Trước khi nhập: đối chiếu tổng đọc được với dòng TOTAL, cảnh báo dòng thiếu xe / ngày lệch tháng (tự sửa ngày gõ kiểu tháng/ngày).
 - Nhập lại cùng file không tạo trùng; *Gỡ đợt nhập* chuyển cả tháng vào Thùng rác.
-- Lãi trong TMG tính trên cước **trước VAT** nên thấp hơn số "lãi" trong file gốc (tính trên cước gồm VAT).
 
 ## Cách tính lãi lỗ theo đầu xe
 - **Doanh thu** = phiếu *Nhập doanh thu* ở trạng thái *Đã xác nhận*

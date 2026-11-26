@@ -62,10 +62,12 @@
   function expectFin(b) {
     const s = (arr, f, v) => (arr || []).filter(r => !r._deleted && f(r)).reduce((a, r) => a + Number(r[v] || 0), 0);
     return {
-      rev: s(b.revenue, r => r.status === 'Đã xác nhận', 'amount'),
+      // Doanh thu mặc định tính theo cước GỒM VAT
+      rev: (b.revenue || []).filter(r => !r._deleted && r.status === 'Đã xác nhận').reduce((a, r) => a + (Number(r.total) || Number(r.amount || 0) + Math.round(Number(r.amount || 0) * TMG_vatRate(r.vat))), 0),
       cost: s(b.cost_request, r => ['Đã duyệt', 'Đã chi'].includes(r.status), 'amount') + s(b.op_cost, () => 1, 'amount') + s(b.route_fuel, () => 1, 'total') + s(b.repair_ticket, r => r.approved === 'Có', 'total')
     };
   }
+  const M_applied = (W, p) => W.TMG_MODULES.customer_payment.fields.find(f => f.k === 'applied').virtual(p);
   const counts = b => Object.fromEntries(Object.entries(b).filter(([k, v]) => Array.isArray(v) && !k.startsWith('__')).map(([k, v]) => [k, v.length]));
 
   async function run() {
@@ -113,7 +115,7 @@
       SA.remove('revenue', r.id);
       ok(!SA.all('revenue').some(x => x.id === r.id), 'Vẫn còn trong danh sách');
       ok(SA.trash().some(x => x.rec.id === r.id), 'Không có trong thùng rác');
-      eq(SA.finance({}).revenue, before - r.amount, 'Doanh thu sau khi xoá');
+      eq(SA.finance({}).revenue, before - SA.revValue(r), 'Doanh thu sau khi xoá');
       SA.restore('revenue', r.id);
       eq(SA.finance({}).revenue, before, 'Doanh thu sau khi khôi phục');
       ok(!SA.trash().some(x => x.rec.id === r.id), 'Vẫn còn trong thùng rác');
@@ -335,31 +337,55 @@
       ok(p.warn.some(w => w.includes('không thuộc tháng')), 'Cảnh báo ngày ngoài tháng');
 
       const R = { from: '2026-10-01', to: '2026-11-30' }, f0 = SA.finance(R);
-      const cnt = () => ['vehicle', 'customer', 'order', 'revenue', 'cost_request', 'op_cost'].map(c => SA.all(c).length);
+      const cnt = () => ['vehicle', 'customer', 'order', 'revenue', 'chi_ho', 'op_cost', 'cost_request'].map(c => SA.all(c).length);
       const c0 = cnt();
       p.trips[1].plate = ''; // giả lập dòng file ghi số xe "0" -> gán cho xe được chọn
       const r1 = await I.apply(p, { vat: '8%', fallbackPlate: '99Z-999.01' });
-      eq([r1.trips, r1.skipped, r1.revenue, r1.lolo, r1.costs], [3, 0, 12062500, 3852000, 11500001], 'Kết quả nhập');
-      eq(cnt().map((x, i) => x - c0[i]), [1, 2, 3, 5, 2, 2], 'Số bản ghi tạo mới (xe, khách, đơn, doanh thu, chi phí chi hộ, chi phí tháng)');
+      eq([r1.trips, r1.skipped, r1.revenue, r1.lolo, r1.costs], [3, 0, 13027500, 3852000, 11500001], 'Kết quả nhập');
+      eq(cnt().map((x, i) => x - c0[i]), [1, 2, 3, 3, 2, 2, 0], 'Số bản ghi tạo mới (xe, khách, đơn, doanh thu cước, chi hộ, chi phí tháng, đề nghị chi)');
       const o2 = SA.all('order').find(o => o.order_no === 'TSTU1000002');
       eq(SA.label('vehicle', o2.vehicle_id, 'plate'), '99Z-999.01', 'Dòng thiếu số xe phải gán cho xe đã chọn'); ok(o2.note.includes('gán cho xe'), 'Ghi chú gán xe');
       const f1 = SA.finance(R);
-      eq([f1.revenue - f0.revenue, f1.cost - f0.cost, f1.profit - f0.profit], [12062500 + 3852000, 3852000 + 11500001, 12062500 - 11500001], 'Tài chính sau khi nhập');
+      eq([f1.revenue - f0.revenue, f1.cost - f0.cost, f1.profit - f0.profit, f1.chiho - f0.chiho], [13027500, 11500001, 13027500 - 11500001, 3852000], 'Tài chính: doanh thu = cước gồm VAT, chi hộ tách riêng không vào lãi');
       const od = SA.all('order').find(o => o.order_no === 'TSTU1000001');
       eq([od.booking, od.cont_size, od.lift_fee, od.drop_fee, od.invoice_ref, od.freight, od.status], ['BK1', "40'", 1788000, 1064000, '33', 4062500, 'Hoàn thành']);
       const codes = SA.all('order').map(o => o.code); eq(new Set(codes).size, codes.length, 'Mã đơn hàng bị trùng');
-      ok(SA.all('cost_request').filter(c => c.import_batch === 'TH-2026-10').every(c => c.status === 'Đã chi'), 'Chi hộ phải ở trạng thái Đã chi');
+
+      // Công nợ: thanh toán theo số tiền (trừ khoản cũ nhất) và theo hóa đơn
+      const cA = SA.all('customer').find(c => c.name === 'Khách Thử A').id, cB = SA.all('customer').find(c => c.name === 'Khách Thử B').id;
+      const rcv = () => SA.receivables().items.filter(x => x.rec.import_batch === 'TH-2026-10');
+      eq(rcv().map(x => [x.t, x.inv, x.due]), [['revenue', '33', 4387500], ['chi_ho', '33', 2852000], ['revenue', '33', 3240000], ['chi_ho', '33', 1000000], ['revenue', '34', 5400000]], 'Khoản phải thu: cước gồm VAT và chi hộ tách riêng');
+      const p1 = SA.insert('customer_payment', { code: 'TT-T1', date: '2026-10-20', customer_id: cA, amount: 5000000 });
+      eq(rcv().map(x => [x.paid, x.status]), [[4387500, 'Đã thanh toán'], [612500, 'Thanh toán một phần'], [0, 'Chưa thanh toán'], [0, 'Chưa thanh toán'], [0, 'Chưa thanh toán']], 'Chỉ nhập số tiền: trừ vào khoản cũ nhất');
+      const rB = rcv()[4];
+      const p2 = SA.insert('customer_payment', { code: 'TT-T2', date: '2026-11-10', customer_id: cB, amount: 5400000, alloc: [{ t: 'revenue', id: rB.id, a: 5400000 }] });
+      eq(rcv()[4].status, 'Đã thanh toán', 'Trả đúng hóa đơn 34');
+      d3.querySelector('#modal-root').innerHTML = ''; WA.location.hash = '#/p/receivable'; await sleep(80);
+      ok(d3.querySelectorAll('[data-payg]').length >= 1, 'Trang công nợ phải có hóa đơn chưa thu');
+      const gBtn = [...d3.querySelectorAll('[data-payg]')].find(b => b.dataset.payg.startsWith(cA + '|33'));
+      ok(gBtn, 'Không thấy HĐ 33 của khách A'); gBtn.click(); await sleep(50);
+      const pf = d3.querySelector('#pf'); eq(WA.U.num(pf.a.value), 2852000 - 612500 + 3240000 + 1000000, 'Tick hóa đơn: số tiền tự cộng phần còn nợ');
+      pf.requestSubmit(); await sleep(80);
+      ok(rcv().every(x => x.status === 'Đã thanh toán'), 'Thu tiền HĐ 33 xong phải hết nợ: ' + JSON.stringify(rcv().map(x => x.status)));
+      ok(!d3.querySelector('[data-payg^="' + cA + '|33"]'), 'HĐ đã trả không còn ở danh sách chưa thanh toán');
+      const p3 = SA.all('customer_payment').find(x => x.customer_id === cA && x.alloc && x.alloc.length);
+      ok(p3 && M_applied(WA, p3).includes('HĐ 33'), 'Lần thanh toán phải ghi rõ đã trừ vào HĐ 33');
+      // Tổng quan: chọn tháng bất kỳ
+      d3.querySelector('#modal-root').innerHTML = ''; WA.location.hash = '#/p/dashboard'; await sleep(80);
+      const pm = d3.querySelector('#perm'); pm.value = '2026-10'; pm.dispatchEvent(new Event('change')); await sleep(50);
+      ok(d3.querySelector('.page-head .desc').textContent.includes('tháng 10/2026'), 'Tổng quan chưa chuyển sang tháng 10/2026');
+      [p1, p2, p3].forEach(x => SA.remove('customer_payment', x.id));
 
       const r2 = await I.apply(p, { vat: '8%', fallbackPlate: '99Z-999.01' });
       eq([r2.trips, r2.skipped, r2.costs], [0, 3, 0], 'Nhập lại lần 2 phải bỏ qua hết');
-      eq(cnt().map((x, i) => x - c0[i]), [1, 2, 3, 5, 2, 2], 'Nhập lại không tạo trùng');
+      eq(cnt().map((x, i) => x - c0[i]), [1, 2, 3, 3, 2, 2, 0], 'Nhập lại không tạo trùng');
       eq(I.existing(p), 3);
 
       d3.querySelector('#modal-root').innerHTML = ''; WA.location.hash = '#/p/import_month'; await sleep(80);
       ok(d3.querySelector('[data-undo="TH-2026-10"]'), 'Trang nhập chưa hiện đợt đã nhập');
-      eq(I.undo('TH-2026-10'), 12, 'Số bản ghi được gỡ');
-      const f2 = SA.finance(R); eq([f2.revenue, f2.cost], [f0.revenue, f0.cost], 'Gỡ xong tài chính phải về như cũ');
-      ok(SA.trash().filter(x => x.rec.import_batch === 'TH-2026-10').length === 12, 'Bản ghi gỡ phải nằm trong thùng rác');
+      eq(I.undo('TH-2026-10'), 10, 'Số bản ghi được gỡ');
+      const f2 = SA.finance(R); eq([f2.revenue, f2.cost, f2.chiho], [f0.revenue, f0.cost, f0.chiho], 'Gỡ xong tài chính phải về như cũ');
+      ok(SA.trash().filter(x => x.rec.import_batch === 'TH-2026-10').length === 10, 'Bản ghi gỡ phải nằm trong thùng rác');
       ok(!A.errors.length, A.errors.join('\n'));
     });
 

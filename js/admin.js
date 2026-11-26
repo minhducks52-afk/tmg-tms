@@ -56,7 +56,7 @@
     ok: ['Hoàn thành', 'Đã xác nhận', 'Đã duyệt', 'Đã chi', 'Đã thanh toán', 'Đã phê duyệt', 'Có', 'Đã thu tiền', 'Đã xử lý', 'Xe trống', 'Hoạt động', 'Đã tạo đơn'],
     warn: ['Chờ duyệt', 'Chờ xác nhận', 'Chờ tài xế xác nhận', 'Chờ nhận hàng', 'Chưa phê duyệt', 'Thanh toán chưa đủ', 'Đang xử lý', 'Chưa thanh toán', 'Gửi tài xế', 'Mới', 'Chưa xử lý', 'Chưa bắt đầu', 'Khởi tạo', 'Tạo mới'],
     bad: ['Hủy', 'Từ chối', 'Đã hủy', 'Xe hỏng', 'Xe công an giữ', 'Không'],
-    info: ['Đang vận chuyển', 'Đang chạy', 'Xe đang vận chuyển', 'Sẵn sàng', 'Đã cấp số hóa đơn', 'Đã tiếp nhận', 'Kế toán đã duyệt', 'Đã quyết toán'],
+    info: ['Đang vận chuyển', 'Đang chạy', 'Xe đang vận chuyển', 'Sẵn sàng', 'Đã cấp số hóa đơn', 'Đã tiếp nhận', 'Kế toán đã duyệt', 'Đã quyết toán', 'Thanh toán một phần'],
     neutral: ['Chưa quyết toán']
   };
   const chip = (v, kind) => { if (!v) return ''; const k = kind || Object.keys(BADGE).find(k => BADGE[k].includes(v)); return `<span class="chip ${k || ''}">${esc(v)}</span>`; };
@@ -857,7 +857,7 @@
   }
 
   /* ---------- Charts ---------- */
-  function barChart(months, series) {
+  function barChart(months, series, opts = {}) {
     const W = 560, H = 240, L = 56, B = 26, T = 10, R = 8;
     const max = Math.max(1, ...series.flatMap(s => s.values)); const nice = niceMax(max);
     const gw = (W - L - R) / months.length; const bw = Math.min(24, (gw - 14) / series.length);
@@ -875,7 +875,7 @@
     setTimeout(() => {
       const box = document.getElementById(id); if (!box) return; const tt = $('.tt', box);
       $$('rect[data-i]', box).forEach(r => {
-        r.onmousemove = e => { const i = +r.dataset.i; const rect = box.getBoundingClientRect(); tt.style.display = 'block'; tt.innerHTML = `<b>Tháng ${months[i].slice(5)}/${months[i].slice(0, 4)}</b><br>` + series.map(s => `<span style="color:${s.color}">■</span> ${s.name}: <b>${U.money(s.values[i])}</b>`).join('<br>') + (series.length === 2 ? `<br>Lợi nhuận: <b class="${series[0].values[i] - series[1].values[i] >= 0 ? 'pos' : 'neg'}">${U.money(series[0].values[i] - series[1].values[i])}</b>` : ''); let lx = e.clientX - rect.left + 14; if (lx + tt.offsetWidth > rect.width) lx = e.clientX - rect.left - tt.offsetWidth - 14; tt.style.left = lx + 'px'; tt.style.top = Math.max(0, e.clientY - rect.top - 20) + 'px'; };
+        r.onmousemove = e => { const i = +r.dataset.i; const rect = box.getBoundingClientRect(); tt.style.display = 'block'; tt.innerHTML = `<b>Tháng ${months[i].slice(5)}/${months[i].slice(0, 4)}</b><br>` + series.map(s => `<span style="color:${s.color}">■</span> ${s.name}: <b>${U.money(s.values[i])}</b>`).join('<br>') + (series.length === 2 && opts.profit !== false ? `<br>Lợi nhuận: <b class="${series[0].values[i] - series[1].values[i] >= 0 ? 'pos' : 'neg'}">${U.money(series[0].values[i] - series[1].values[i])}</b>` : ''); let lx = e.clientX - rect.left + 14; if (lx + tt.offsetWidth > rect.width) lx = e.clientX - rect.left - tt.offsetWidth - 14; tt.style.left = lx + 'px'; tt.style.top = Math.max(0, e.clientY - rect.top - 20) + 'px'; };
         r.onmouseleave = () => { tt.style.display = 'none'; };
       });
     });
@@ -895,6 +895,7 @@
   }
   const head = (title, desc, acts = '') => `<div class="page-head"><div><h1>${title}</h1>${desc ? `<div class="desc">${desc}</div>` : ''}</div><div class="grow"></div><div class="acts">${acts}</div></div>`;
   function periodRange(p) {
+    if (/^\d{4}-\d{2}$/.test(p || '')) { const pm = U.addMonths(p, -1); return { from: p + '-01', to: monthEnd(p), prev: { from: pm + '-01', to: monthEnd(pm) }, label: 'tháng ' + +p.slice(5) + '/' + p.slice(0, 4) }; }
     const ym = U.today().slice(0, 7), y = ym.slice(0, 4), m = +ym.slice(5);
     if (p === 'pm') { const k = U.addMonths(ym, -1); return { from: k + '-01', to: monthEnd(k), prev: { from: U.addMonths(ym, -2) + '-01', to: monthEnd(U.addMonths(ym, -2)) }, label: 'tháng trước' }; }
     if (p === 'q') { const qs = Math.floor((m - 1) / 3) * 3 + 1; const a = y + '-' + String(qs).padStart(2, '0'); const pa = U.addMonths(a, -3); return { from: a + '-01', to: monthEnd(U.addMonths(a, 2)), prev: { from: pa + '-01', to: monthEnd(U.addMonths(pa, 2)) }, label: 'quý này' }; }
@@ -916,12 +917,53 @@
     $('#px', el).onclick = () => { const ts = $$('#rb table', el); exportTable(ts[ts.length - 1], key.replace('_', '') + '_' + st.from + '_' + st.to); };
     draw();
   }
+  // Ghi nhận khách thanh toán: tick hóa đơn (cước / chi hộ) cần trừ, hoặc chỉ nhập số tiền (tự trừ khoản cũ nhất)
+  function payDialog(custId, groupKey, done) {
+    const mOf = x => x.date.slice(0, 7);
+    const open = Store.all('customer').filter(c => Store.receivables().items.some(x => x.customer === c.id && x.remain > 0));
+    let cust = custId || (open[0] && open[0].id) || (Store.all('customer')[0] || {}).id || '';
+    const custs = open.concat(Store.all('customer').filter(c => !open.includes(c)));
+    overlay(`<form class="modal" id="pf"><div class="m-h"><h3>Ghi nhận khách thanh toán</h3><button type="button" class="btn ghost icon" data-close>${ic('x')}</button></div><div class="m-b">
+      <div class="form-grid">
+        <div class="field"><label>Khách hàng</label><select name="c" required>${custs.map(c => `<option value="${c.id}" ${c.id === cust ? 'selected' : ''}>${esc(c.name)}${open.includes(c) ? '' : ' (không còn nợ)'}</option>`).join('')}</select></div>
+        <div class="field"><label>Ngày thanh toán</label><input type="date" name="d" value="${U.today()}" required></div>
+        <div class="field"><label>Số tiền khách trả (đ)</label><input name="a" inputmode="numeric" required autocomplete="off"></div>
+        <div class="field"><label>Hình thức</label><select name="m"><option>Chuyển khoản</option><option>Tiền mặt</option><option>Bù trừ</option></select></div>
+        <div class="field" style="grid-column:1/-1"><label>Ghi chú</label><input name="n" autocomplete="off"></div>
+      </div>
+      <div class="hint">Tick hóa đơn / chi hộ khách trả thì số tiền tự cộng (sửa lại được). Không tick gì: số tiền tự trừ vào khoản cũ nhất. Trả nhiều hơn số tick: phần dư tự trừ tiếp khoản cũ nhất.</div>
+      <div id="pl" style="max-height:340px;overflow:auto;margin-top:8px"></div>
+    </div><div class="m-f"><button type="button" class="btn" data-close>Huỷ</button><button class="btn primary">${ic('check')} Lưu thanh toán</button></div></form>`, (layer, close) => {
+      const form = $('#pf', layer); let groups = [];
+      const sum = a => a.reduce((s, x) => s + x.remain, 0);
+      const ticked = () => $$('input[data-g]:checked', layer).flatMap(c => groups[+c.dataset.g][c.dataset.t]);
+      const list = () => {
+        const g = new Map();
+        Store.receivables().items.filter(x => x.customer === cust && x.remain > 0).forEach(x => { const k = x.customer + '|' + (x.inv || '~' + mOf(x)); let o = g.get(k); if (!o) g.set(k, o = { k, inv: x.inv, month: mOf(x), rev: [], ch: [] }); (x.t === 'revenue' ? o.rev : o.ch).push(x); });
+        groups = [...g.values()].sort((a, b) => a.month.localeCompare(b.month) || String(a.inv).localeCompare(String(b.inv), 'vi', { numeric: true }));
+        const box = (o, i, t) => sum(o[t]) ? `<label style="cursor:pointer"><input type="checkbox" data-g="${i}" data-t="${t}" ${o.k === groupKey ? 'checked' : ''}> ${U.money(sum(o[t]))}</label>` : '';
+        $('#pl', layer).innerHTML = groups.length ? `<table class="grid"><thead><tr><th class="nosort">Hóa đơn</th><th class="nosort">Tháng</th><th class="num nosort">Cước còn nợ</th><th class="num nosort">Chi hộ còn nợ</th></tr></thead><tbody>${groups.map((o, i) => `<tr><td class="code">${o.inv ? 'HĐ ' + esc(o.inv) : 'Chưa có số HĐ'}</td><td>T${+o.month.slice(5)}/${o.month.slice(0, 4)}</td><td class="num">${box(o, i, 'rev')}</td><td class="num">${box(o, i, 'ch')}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Khách này không còn nợ — số tiền được ghi là trả trước (dư)</div>';
+        const upd = () => { const t = ticked(); if (t.length) form.a.value = U.money(sum(t)); };
+        $$('input[data-g]', layer).forEach(c => c.onchange = upd); upd();
+      };
+      form.c.onchange = () => { cust = form.c.value; form.a.value = ''; groupKey = null; list(); };
+      list();
+      form.onsubmit = e => {
+        e.preventDefault(); const amount = U.num(form.a.value); if (amount <= 0) { alert('Nhập số tiền khách trả'); return; }
+        const alloc = ticked().map(x => ({ t: x.t, id: x.id, a: x.remain }));
+        Store.insert('customer_payment', { code: Store.nextCode('customer_payment', 'TT'), date: form.d.value, customer_id: cust, amount, method: form.m.value, note: form.n.value, alloc });
+        close(); toast('Đã ghi nhận thanh toán ' + U.money(amount) + ' đ'); done && done();
+      };
+    });
+  }
   const PAGES = {
     dashboard(el) {
       const per = PAGES._per || 'm'; const R = periodRange(per);
       const cur = Store.finance(R), prev = Store.finance(R.prev);
-      const ym = U.today().slice(0, 7);
+      const ym = R.to.slice(0, 7) < U.today().slice(0, 7) ? R.to.slice(0, 7) : U.today().slice(0, 7);
       const months = [...Array(6)].map((_, i) => U.addMonths(ym, i - 5));
+      const RC = Store.receivables(); const debtM = months.map(m => RC.items.filter(x => x.date.slice(0, 7) === m));
+      const remR = RC.items.filter(x => x.t === 'revenue').reduce((s, x) => s + x.remain, 0), remC = RC.items.filter(x => x.t === 'chi_ho').reduce((s, x) => s + x.remain, 0);
       const fin = months.map(m => Store.finance({ from: m + '-01', to: monthEnd(m) }));
       const routes = Store.all('route'); const running = routes.filter(r => r.status === 'Đang chạy').length;
       const trips = routes.filter(r => r.pickup_date >= R.from && r.pickup_date <= R.to && r.status !== 'Hủy').length;
@@ -938,7 +980,7 @@
         ...expiries().filter(x => x.days <= 30).slice(0, 5).map(x => `<div class="todo"><span class="ic" style="background:var(--bad-bg);color:var(--bad)">${ic('clock')}</span><div class="tx"><div><a href="${x.href}">${esc(x.what)}</a> · ${esc(x.who)}</div><small>Hết hạn ${U.date(x.d)}</small></div>${chip(x.days < 0 ? 'Quá ' + (-x.days) + ' ngày' : 'Còn ' + x.days + ' ngày', x.days < 0 ? 'bad' : 'warn')}</div>`)
       ].join('');
       el.innerHTML = head(`${hr < 11 ? 'Chào buổi sáng' : hr < 18 ? 'Chào buổi chiều' : 'Chào buổi tối'}, ${esc(s.name || '')}`, `Tình hình kinh doanh ${R.label} · ${U.date(R.from)} – ${U.date(R.to)}`,
-        `<div class="seg" id="per">${[['m', 'Tháng này'], ['pm', 'Tháng trước'], ['q', 'Quý này'], ['y', 'Năm nay']].map(([k, l]) => `<button data-p="${k}" class="${per === k ? 'on' : ''}">${l}</button>`).join('')}</div>`) + `
+        `<div class="seg" id="per">${[['m', 'Tháng này'], ['pm', 'Tháng trước'], ['q', 'Quý này'], ['y', 'Năm nay']].map(([k, l]) => `<button data-p="${k}" class="${per === k ? 'on' : ''}">${l}</button>`).join('')}</div> <input type="month" class="input sm" id="perm" title="Chọn tháng bất kỳ" value="${/^\d{4}-\d{2}$/.test(per) ? per : ''}">`) + `
       <div class="stack">
         <div class="kpis">
           <button class="kpi" data-go="#/m/revenue"><div class="top"><span class="ico">${ic('dollar')}</span>Doanh thu</div><div class="v">${U.money(cur.revenue)}</div><div class="s">${delta(cur.revenue, prev.revenue)} so với kỳ trước</div></button>
@@ -947,9 +989,18 @@
           <button class="kpi" data-go="#/m/route"><div class="top"><span class="ico">${ic('truck')}</span>Chuyến xe</div><div class="v">${trips}</div><div class="s">${running} chuyến đang chạy</div></button>
           <button class="kpi" data-go="#/m/cost_request?s=Chờ duyệt"><div class="top"><span class="ico">${ic('clock')}</span>Chờ duyệt chi</div><div class="v">${pend.length}</div><div class="s">${U.money(pend.reduce((a, r) => a + U.num(r.amount), 0))} đ · ${pendRev.length} doanh thu chờ xác nhận</div></button>
         </div>
+        <div class="kpis">
+          <button class="kpi" data-go="#/m/chi_ho"><div class="top"><span class="ico">${ic('receipt')}</span>Chi hộ khách (nâng/hạ) ${R.label}</div><div class="v">${U.money(cur.chiho)}</div><div class="s">Không tính vào doanh thu / lãi</div></button>
+          <button class="kpi" data-go="#/p/receivable"><div class="top"><span class="ico">${ic('dollar')}</span>Cước khách còn nợ</div><div class="v">${U.money(remR)}</div><div class="s">Tất cả các tháng · gồm VAT</div></button>
+          <button class="kpi" data-go="#/p/receivable"><div class="top"><span class="ico">${ic('dollar')}</span>Chi hộ khách còn nợ</div><div class="v">${U.money(remC)}</div><div class="s">Tất cả các tháng</div></button>
+        </div>
         <div class="grid2">
           <div class="card"><div class="card-h"><h3>Doanh thu và chi phí 6 tháng</h3><span class="grow"></span><a href="#/p/rpt_month">Xem 12 tháng</a></div><div class="card-b">${barChart(months, [{ name: 'Doanh thu', color: 'var(--rev)', values: fin.map(f => f.revenue) }, { name: 'Chi phí', color: 'var(--cost)', values: fin.map(f => f.cost) }])}</div></div>
           <div class="card"><div class="card-h"><h3>Chi phí theo khoản mục</h3><span class="grow"></span><a href="#/p/rpt_cat">Chi tiết</a></div><div class="card-b">${hbars(Object.entries(cur.rows.filter(r => r.kind === 'cost').reduce((a, r) => (a[r.cat] = (a[r.cat] || 0) + r.amount, a), {})).sort((a, b) => b[1] - a[1]).slice(0, 8), 'var(--cost)') || '<div class="empty">Chưa có chi phí</div>'}</div></div>
+        </div>
+        <div class="grid2">
+          <div class="card"><div class="card-h"><h3>Cước và chi hộ phát sinh 6 tháng</h3><span class="grow"></span><a href="#/m/chi_ho">Chi hộ</a></div><div class="card-b">${barChart(months, [{ name: 'Cước (gồm VAT)', color: 'var(--rev)', values: debtM.map(a => a.filter(x => x.t === 'revenue').reduce((s, x) => s + x.due, 0)) }, { name: 'Chi hộ', color: 'var(--chiho)', values: debtM.map(a => a.filter(x => x.t === 'chi_ho').reduce((s, x) => s + x.due, 0)) }], { profit: false })}</div></div>
+          <div class="card"><div class="card-h"><h3>Khách còn nợ theo tháng phát sinh</h3><span class="grow"></span><a href="#/p/receivable">Công nợ & thanh toán</a></div><div class="card-b">${barChart(months, [{ name: 'Cước chưa thu', color: 'var(--rev)', values: debtM.map(a => a.filter(x => x.t === 'revenue').reduce((s, x) => s + x.remain, 0)) }, { name: 'Chi hộ chưa thu', color: 'var(--chiho)', values: debtM.map(a => a.filter(x => x.t === 'chi_ho').reduce((s, x) => s + x.remain, 0)) }], { profit: false })}</div></div>
         </div>
         <div class="grid2">
           <div class="card"><div class="card-h"><h3>Hiệu quả theo đầu xe</h3><span class="grow"></span><a href="#/p/rpt_vehicle">Báo cáo lãi lỗ</a></div><div class="card-b" style="padding-top:6px;overflow-x:auto"><table class="grid"><thead><tr><th class="nosort">Biển số</th><th class="nosort">Tài xế</th><th class="num nosort">Doanh thu</th><th class="num nosort">Chi phí</th><th class="num nosort">Lợi nhuận</th><th class="nosort" style="width:120px"></th></tr></thead>
@@ -960,6 +1011,7 @@
       </div>`;
       $$('[data-go]', el).forEach(k => k.onclick = () => location.hash = k.dataset.go);
       $$('#per button', el).forEach(b => b.onclick = () => { PAGES._per = b.dataset.p; PAGES.dashboard(el); });
+      $('#perm', el).onchange = e => { if (e.target.value) { PAGES._per = e.target.value; PAGES.dashboard(el); } };
     },
 
     board(el) {
@@ -1057,7 +1109,7 @@
         const fuels = Store.all('route_fuel'); const reqs = Store.all('cost_request').filter(x => APPROVED.includes(x.status));
         const rows = Store.all('route').filter(r => r.status !== 'Hủy' && (r.pickup_date || '') >= st.from && (r.pickup_date || '') <= st.to).map(rt => {
           const ids = new Set(rt.order_ids || []);
-          const rev = revs.filter(x => x.route_id === rt.id || (!x.route_id && x.order_id && ids.has(x.order_id))).reduce((s, x) => s + U.num(x.amount), 0);
+          const rev = revs.filter(x => x.route_id === rt.id || (!x.route_id && x.order_id && ids.has(x.order_id))).reduce((s, x) => s + Store.revValue(x), 0);
           const fuel = fuels.filter(x => x.route_id === rt.id).reduce((s, x) => s + U.num(x.total), 0);
           const cost = reqs.filter(x => x.route_id === rt.id).reduce((s, x) => s + U.num(x.amount), 0);
           return { rt, rev, fuel, cost, profit: rev - fuel - cost };
@@ -1096,17 +1148,19 @@
       const B = [['Trong hạn', x => x <= 0], ['Quá hạn 1–30', x => x > 0 && x <= 30], ['31–60', x => x > 30 && x <= 60], ['61–90', x => x > 60 && x <= 90], ['> 90 ngày', x => x > 90]];
       const rows = Store.all('customer').map(c => {
         const days = U.num(c.debt_days) || 30;
-        const items = Store.all('revenue').filter(r => r.customer_id === c.id && r.status === 'Đã xác nhận' && r.collect === 'Công nợ')
-          .map(r => ({ date: r.date, amt: U.num(r.total) || (U.num(r.amount) + Math.round(U.num(r.amount) * TMG_vatRate(r.vat))) })).sort((a, b) => String(a.date).localeCompare(String(b.date)));
-        const owed = items.reduce((s, x) => s + x.amt, 0);
-        const paid = Store.all('receipt_voucher').filter(r => r.customer_id === c.id).reduce((s, r) => s + U.num(r.amount), 0);
-        let left = paid; const age = B.map(() => 0);
+        // Cước (gồm VAT) + chi hộ; phần khách đã trả ở mục "Khách thanh toán" được trừ trước, phiếu thu (cũ) trừ tiếp vào khoản cũ nhất
+        const its = Store.receivables().items.filter(x => x.customer === c.id);
+        const items = its.map(x => ({ date: x.date, amt: x.remain }));
+        const owed = its.reduce((s, x) => s + x.due, 0);
+        const rv = Store.all('receipt_voucher').filter(r => r.customer_id === c.id).reduce((s, r) => s + U.num(r.amount), 0);
+        const paid = its.reduce((s, x) => s + x.paid, 0) + rv;
+        let left = rv; const age = B.map(() => 0);
         items.forEach(x => { const use = Math.min(left, x.amt); left -= use; const rest = x.amt - use; if (rest <= 0) return; const over = dd(today, x.date) - days; age[B.findIndex(b => b[1](over))] += rest; });
         return { c, days, owed, paid, debt: owed - paid, age };
       }).filter(r => r.owed || r.paid).sort((a, b) => b.debt - a.debt);
       const T = k => rows.reduce((s, r) => s + r[k], 0); const TA = i => rows.reduce((s, r) => s + r.age[i], 0);
       const overdue = rows.reduce((s, r) => s + r.age.slice(1).reduce((a, b) => a + b, 0), 0);
-      el.innerHTML = head('Công nợ khách hàng', `Tính đến ${U.date(today)}. Phát sinh = doanh thu hình thức "Công nợ" đã xác nhận (sau VAT). Phiếu thu trừ vào khoản phát sinh cũ nhất trước.`, `<button class="btn" id="px">${ic('dl')} Xuất Excel</button>`) + `
+      el.innerHTML = head('Công nợ khách hàng', `Tính đến ${U.date(today)}. Phát sinh = cước hình thức "Công nợ" đã xác nhận (gồm VAT) + chi hộ. Đã thu = Khách thanh toán + Phiếu thu. Chi tiết theo hóa đơn xem tại <a href="#/p/receivable">Công nợ &amp; thanh toán</a>.`, `<button class="btn" id="px">${ic('dl')} Xuất Excel</button>`) + `
         <div class="mini-kpis" style="margin-bottom:14px"><div><small>Tổng còn phải thu</small><b>${short(T('debt'))}</b></div><div><small>Đã quá hạn</small><b class="${overdue ? 'neg' : ''}">${short(overdue)}</b></div><div><small>Đã thu</small><b>${short(T('paid'))}</b></div></div>
         <div class="card" style="overflow:auto" id="rb"><table class="grid"><thead><tr><th class="nosort">Khách hàng</th><th class="num nosort">Hạn (ngày)</th><th class="num nosort">Phát sinh</th><th class="num nosort">Đã thu</th><th class="num nosort">Còn nợ</th>${B.map(b => `<th class="num nosort">${b[0]}</th>`).join('')}</tr></thead><tbody>
         ${rows.map(r => `<tr onclick="location.hash='#/m/customer?id=${r.c.id}'"><td>${esc(r.c.name)}</td><td class="num">${r.days}</td><td class="num">${U.money(r.owed)}</td><td class="num">${U.money(r.paid)}</td><td class="num"><b>${U.money(r.debt)}</b></td>${r.age.map((a, i) => `<td class="num ${i && a ? 'neg' : ''}">${a ? U.money(a) : ''}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${5 + B.length}"><div class="empty">Không có công nợ</div></td></tr>`}</tbody>
@@ -1129,6 +1183,73 @@
       });
     },
 
+    // Công nợ & thanh toán: cước (gồm VAT) và chi hộ theo từng hóa đơn / tháng; ghi nhận khách thanh toán
+    receivable(el) {
+      const st = PAGES._recv = PAGES._recv || { cust: '', month: '', status: 'open', view: 'inv' };
+      const redraw = () => PAGES.receivable(el);
+      const RC = Store.receivables(), mOf = x => x.date.slice(0, 7), mL = m => m ? 'T' + +m.slice(5) + '/' + m.slice(0, 4) : '—';
+      const contOf = x => x.t === 'chi_ho' ? x.rec.cont_no || Store.label('order', x.rec.order_id, 'order_no') : Store.label('order', x.rec.order_id, 'order_no') || '';
+      const byCust = RC.items.filter(x => !st.cust || x.customer === st.cust);
+      const months = [...new Set(RC.items.map(mOf).filter(Boolean))].sort();
+      const shown = byCust.filter(x => (!st.month || mOf(x) === st.month) && (st.status === 'all' || (st.status === 'open' ? x.remain > 0 : x.remain <= 0)));
+      // Gom theo hóa đơn (khách + số HĐ; chưa có số HĐ thì gom theo tháng)
+      const groups = new Map();
+      byCust.filter(x => !st.month || mOf(x) === st.month).forEach(x => {
+        const k = x.customer + '|' + (x.inv || '~' + mOf(x)); let g = groups.get(k);
+        if (!g) groups.set(k, g = { k, customer: x.customer, inv: x.inv, month: mOf(x), conts: new Set(), rev: [0, 0, 0], ch: [0, 0, 0], items: [] });
+        if (mOf(x) < g.month) g.month = mOf(x);
+        const c = contOf(x); if (c) g.conts.add(c); g.items.push(x);
+        const a = x.t === 'revenue' ? g.rev : g.ch; a[0] += x.due; a[1] += x.paid; a[2] += x.remain;
+      });
+      const gl = [...groups.values()].filter(g => st.status === 'all' || (st.status === 'open' ? g.rev[2] + g.ch[2] > 0 : g.rev[2] + g.ch[2] <= 0))
+        .sort((a, b) => b.month.localeCompare(a.month) || String(a.inv).localeCompare(String(b.inv), 'vi', { numeric: true }));
+      const gst = g => { const due = g.rev[0] + g.ch[0], rem = g.rev[2] + g.ch[2]; return rem <= 0 ? 'Đã thanh toán' : rem < due ? 'Thanh toán một phần' : 'Chưa thanh toán'; };
+      // Theo tháng
+      const mm = {}; byCust.forEach(x => { const m = mOf(x); const o = mm[m] = mm[m] || { rd: 0, rr: 0, cd: 0, cr: 0 }; if (x.t === 'revenue') { o.rd += x.due; o.rr += x.remain; } else { o.cd += x.due; o.cr += x.remain; } });
+      const mk = Object.keys(mm).sort().slice(-12);
+      const S = (arr, f) => arr.reduce((s, x) => s + f(x), 0);
+      const rRev = S(byCust.filter(x => x.t === 'revenue'), x => x.remain), rCh = S(byCust.filter(x => x.t === 'chi_ho'), x => x.remain);
+      const pays = Store.all('customer_payment').filter(p => !st.cust || p.customer_id === st.cust).slice().sort((a, b) => String(b.date).localeCompare(String(a.date)));
+      const over = S(pays, p => (RC.payInfo[p.id] || { left: 0 }).left);
+      const custs = Store.all('customer').filter(c => RC.items.some(x => x.customer === c.id) || Store.all('customer_payment').some(p => p.customer_id === c.id));
+      const sel = (id, opts, v) => `<select class="input sm" id="${id}" style="width:auto;min-width:170px;flex:0 0 auto">${opts.map(([val, l]) => `<option value="${esc(val)}" ${val === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+      el.innerHTML = head('Công nợ & thanh toán', 'Doanh thu cước (gồm VAT) và chi hộ (nâng/hạ, cược) tách riêng, theo từng hóa đơn và từng tháng. Khách trả tiền: bấm "Ghi nhận thanh toán", chọn hóa đơn cần trừ hoặc chỉ nhập số tiền (tự trừ khoản cũ nhất).',
+        `<button class="btn" id="px">${ic('dl')} Xuất Excel</button> <button class="btn primary" id="pay">${ic('plus')} Ghi nhận thanh toán</button>`) + `<div class="stack">
+        <div class="kpis">
+          <div class="kpi"><div class="top">Tổng còn phải thu</div><div class="v">${U.money(rRev + rCh)}</div></div>
+          <div class="kpi"><div class="top">Cước chưa thu (gồm VAT)</div><div class="v">${U.money(rRev)}</div><div class="s">${new Set(byCust.filter(x => x.t === 'revenue' && x.remain > 0).map(x => x.inv || '?')).size} hóa đơn</div></div>
+          <div class="kpi"><div class="top">Chi hộ chưa thu</div><div class="v">${U.money(rCh)}</div><div class="s">${byCust.filter(x => x.t === 'chi_ho' && x.remain > 0).length} khoản chi hộ</div></div>
+          <div class="kpi"><div class="top">Khách trả dư chưa trừ</div><div class="v">${U.money(over)}</div></div>
+        </div>
+        <div class="grid2">
+          <div class="card"><div class="card-h"><h3>Còn phải thu theo tháng phát sinh</h3></div><div class="card-b">${mk.length ? barChart(mk, [{ name: 'Cước chưa thu', color: 'var(--rev)', values: mk.map(m => mm[m].rr) }, { name: 'Chi hộ chưa thu', color: 'var(--chiho)', values: mk.map(m => mm[m].cr) }], { profit: false }) : '<div class="empty">Chưa có công nợ</div>'}</div></div>
+          <div class="card" style="overflow:auto"><div class="card-h"><h3>Tổng hợp theo tháng</h3></div><div class="card-b"><table class="grid"><thead><tr><th class="nosort">Tháng</th><th class="num nosort">Cước (gồm VAT)</th><th class="num nosort">Cước còn nợ</th><th class="num nosort">Chi hộ</th><th class="num nosort">Chi hộ còn nợ</th></tr></thead><tbody>
+            ${mk.slice().reverse().map(m => `<tr data-m="${m}" style="cursor:pointer"><td class="code">${mL(m)}</td><td class="num">${U.money(mm[m].rd)}</td><td class="num ${mm[m].rr ? 'neg' : ''}">${U.money(mm[m].rr)}</td><td class="num">${U.money(mm[m].cd)}</td><td class="num ${mm[m].cr ? 'neg' : ''}">${U.money(mm[m].cr)}</td></tr>`).join('') || '<tr><td colspan="5"><div class="empty">Chưa có dữ liệu</div></td></tr>'}</tbody></table></div></div>
+        </div>
+        <div class="card" style="overflow:auto"><div class="toolbar" style="flex-wrap:wrap;gap:8px">
+          ${sel('fc', [['', 'Tất cả khách']].concat(custs.map(c => [c.id, c.name])), st.cust)}
+          ${sel('fm', [['', 'Tất cả tháng']].concat(months.slice().reverse().map(m => [m, 'Tháng ' + mL(m).slice(1)])), st.month)}
+          ${sel('fs', [['open', 'Chưa thanh toán xong'], ['paid', 'Đã thanh toán'], ['all', 'Tất cả']], st.status)}
+          <div class="seg"><button data-v="inv" class="${st.view === 'inv' ? 'on' : ''}">Theo hóa đơn</button><button data-v="item" class="${st.view === 'item' ? 'on' : ''}">Chi tiết từng cont</button></div></div>
+          <div class="card-b" id="rtab">${st.view === 'inv' ? `<table class="grid"><thead><tr><th class="nosort">Tháng</th><th class="nosort">Khách</th><th class="nosort">Số HĐ</th><th class="num nosort">Số cont</th><th class="num nosort">Cước (gồm VAT)</th><th class="num nosort">Cước còn nợ</th><th class="num nosort">Chi hộ</th><th class="num nosort">Chi hộ còn nợ</th><th class="nosort">Trạng thái</th><th class="nosort"></th></tr></thead><tbody>
+            ${gl.map(g => `<tr><td>${mL(g.month)}</td><td class="code">${esc(Store.label('customer', g.customer))}</td><td>${g.inv ? esc(g.inv) : '<span class="muted">chưa có số</span>'}</td><td class="num">${g.conts.size}</td><td class="num">${U.money(g.rev[0])}</td><td class="num ${g.rev[2] ? 'neg' : ''}">${U.money(g.rev[2])}</td><td class="num">${U.money(g.ch[0])}</td><td class="num ${g.ch[2] ? 'neg' : ''}">${U.money(g.ch[2])}</td><td>${chip(gst(g))}</td><td style="text-align:right">${g.rev[2] + g.ch[2] > 0 ? `<button class="btn sm ok" data-payg="${esc(g.k)}">Thu tiền</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="10"><div class="empty">Không có hóa đơn phù hợp</div></td></tr>'}</tbody>
+            <tfoot><tr><td colspan="4">Tổng</td><td class="num">${U.money(S(gl, g => g.rev[0]))}</td><td class="num">${U.money(S(gl, g => g.rev[2]))}</td><td class="num">${U.money(S(gl, g => g.ch[0]))}</td><td class="num">${U.money(S(gl, g => g.ch[2]))}</td><td colspan="2"></td></tr></tfoot></table>`
+            : `<table class="grid"><thead><tr><th class="nosort">Ngày</th><th class="nosort">Khách</th><th class="nosort">Số HĐ</th><th class="nosort">Container</th><th class="nosort">Loại</th><th class="num nosort">Phải thu</th><th class="num nosort">Đã thu</th><th class="num nosort">Còn nợ</th><th class="nosort">Trạng thái</th></tr></thead><tbody>
+            ${shown.slice().reverse().map(x => `<tr onclick="location.hash='#/m/${x.t}?id=${x.id}'"><td>${U.date(x.date)}</td><td class="code">${esc(Store.label('customer', x.customer))}</td><td>${esc(x.inv)}</td><td>${esc(contOf(x))}</td><td>${x.t === 'revenue' ? 'Cước' : 'Chi hộ' + (x.rec.kind && x.rec.kind !== 'Nâng + hạ' ? ' · ' + esc(x.rec.kind) : '')}</td><td class="num">${U.money(x.due)}</td><td class="num">${U.money(x.paid)}</td><td class="num ${x.remain ? 'neg' : ''}">${U.money(x.remain)}</td><td>${chip(x.status)}</td></tr>`).join('') || '<tr><td colspan="9"><div class="empty">Không có khoản phù hợp</div></td></tr>'}</tbody>
+            <tfoot><tr><td colspan="5">Tổng</td><td class="num">${U.money(S(shown, x => x.due))}</td><td class="num">${U.money(S(shown, x => x.paid))}</td><td class="num">${U.money(S(shown, x => x.remain))}</td><td></td></tr></tfoot></table>`}</div></div>
+        <div class="card" style="overflow:auto"><div class="card-h"><h3>Các lần khách thanh toán</h3><span class="grow"></span><a href="#/m/customer_payment">Xem tất cả</a></div><div class="card-b"><table class="grid"><thead><tr><th class="nosort">Ngày</th><th class="nosort">Mã</th><th class="nosort">Khách</th><th class="num nosort">Số tiền</th><th class="nosort">Đã trừ vào</th><th class="num nosort">Dư chưa trừ</th><th class="nosort"></th></tr></thead><tbody>
+          ${pays.slice(0, 30).map(p => `<tr><td>${U.date(p.date)}</td><td class="code">${esc(p.code)}</td><td>${esc(Store.label('customer', p.customer_id))}</td><td class="num">${U.money(p.amount)}</td><td style="white-space:normal;min-width:220px"><small>${esc(M.customer_payment.fields.find(f => f.k === 'applied').virtual(p))}</small></td><td class="num">${U.money((RC.payInfo[p.id] || {}).left)}</td><td style="text-align:right"><button class="btn sm danger" data-rmp="${p.id}">Xoá</button></td></tr>`).join('') || '<tr><td colspan="7"><div class="empty">Chưa ghi nhận thanh toán nào</div></td></tr>'}</tbody></table></div></div></div>`;
+      $('#fc', el).onchange = e => { st.cust = e.target.value; redraw(); };
+      $('#fm', el).onchange = e => { st.month = e.target.value; redraw(); };
+      $('#fs', el).onchange = e => { st.status = e.target.value; redraw(); };
+      $$('[data-v]', el).forEach(b => b.onclick = () => { st.view = b.dataset.v; redraw(); });
+      $$('[data-m]', el).forEach(r => r.onclick = () => { st.month = r.dataset.m; st.status = 'all'; redraw(); });
+      $('#px', el).onclick = () => exportTable($('#rtab table', el), 'cong_no_' + (st.month || 'tat_ca'));
+      $('#pay', el).onclick = () => payDialog(st.cust, null, redraw);
+      $$('[data-payg]', el).forEach(b => b.onclick = () => { const g = groups.get(b.dataset.payg); payDialog(g.customer, g.k, redraw); });
+      $$('[data-rmp]', el).forEach(b => b.onclick = () => { if (!confirm('Xoá lần thanh toán này? Các hóa đơn đã trừ sẽ quay lại "chưa thanh toán". (Vào Thùng rác, khôi phục được)')) return; Store.remove('customer_payment', b.dataset.rmp); toast('Đã xoá'); redraw(); });
+    },
+
     // Nhập "Bảng tổng hợp tháng" (Excel) -> đơn hàng, doanh thu, chi hộ nâng/hạ, chi phí tháng
     importMonth(el) {
       const I = window.TMG_Import, st = PAGES._im = PAGES._im || { parsed: null, file: '', vat: '8%', done: null, busy: false };
@@ -1146,11 +1267,11 @@
         <div class="card" ${isFinal() ? '' : 'hidden'}><div class="card-h"><h3>1. Chọn file</h3></div><div class="card-b">
           <div class="form-grid"><div class="field"><label>File Excel (.xlsx)</label><input type="file" id="imf" accept=".xlsx"></div>
           <div class="field"><label>Cột "CƯỚC (gồm VAT)" đang tính VAT</label><select id="imv">${['8%', '10%', '5%', 'Không chịu thuế'].map(v => `<option ${v === st.vat ? 'selected' : ''}>${v}</option>`).join('')}</select></div></div>
-          <div class="hint">Mỗi dòng container → <b>Đơn hàng</b> (đã hoàn thành) + <b>Doanh thu cước</b> (tách VAT) · Phí nâng/hạ → <b>Thu chi hộ</b> và <b>Chi phí chi hộ</b> bằng nhau (không làm đổi lãi, nhưng vào công nợ khách) · Các khoản (1)…(9) → <b>Chi phí vận hành</b> của tháng, chia đều cho các xe chạy trong tháng. Xe, khách, địa điểm chưa có sẽ được tạo mới. Dòng đã nhập trước sẽ tự bỏ qua.</div>
+          <div class="hint">Mỗi dòng container → <b>Đơn hàng</b> (đã hoàn thành) + <b>Doanh thu cước</b> (gồm VAT, kèm số hóa đơn) · Phí nâng/hạ + cược → mục <b>Chi hộ</b> (khách trả lại; không tính vào doanh thu / lãi) · Dòng ghi "ĐÃ THANH TOÁN" → tự ghi <b>Khách thanh toán</b> cho hóa đơn đó · Các khoản (1)…(9) → <b>Chi phí vận hành</b> của tháng, phân bổ cho các xe theo số chuyến. Xe, khách, địa điểm chưa có sẽ được tạo mới. Dòng đã nhập trước sẽ tự bỏ qua.</div>
         </div></div>
         ${st.parsed ? `<div class="card" style="overflow:auto"><div class="card-h"><h3>2. Kiểm tra trước khi nhập — ${esc(st.file)}</h3></div><div class="card-b">
-          <table class="grid"><thead><tr><th class="nosort"></th><th class="nosort">Sheet</th><th class="nosort">Tháng</th><th class="num nosort">Số cont</th><th class="nosort">Cước gồm VAT</th><th class="nosort">Nâng / hạ chi hộ</th><th class="num nosort">Chi phí tháng</th><th class="num nosort">Lãi ước tính (trước VAT)</th><th class="nosort">Cảnh báo</th></tr></thead><tbody>
-          ${st.parsed.map((p, i) => { const ex = I.existing(p), rev = p.trips.reduce((s, t) => s + (rate ? Math.round(t.freight / (1 + rate)) : t.freight), 0); return `<tr>
+          <table class="grid"><thead><tr><th class="nosort"></th><th class="nosort">Sheet</th><th class="nosort">Tháng</th><th class="num nosort">Số cont</th><th class="nosort">Cước gồm VAT</th><th class="nosort">Nâng / hạ chi hộ</th><th class="num nosort">Chi phí tháng</th><th class="num nosort">Lãi ước tính</th><th class="nosort">Cảnh báo</th></tr></thead><tbody>
+          ${st.parsed.map((p, i) => { const ex = I.existing(p), rev = p.trips.reduce((s, t) => s + (rate && Store.revBasis() === 'Trước VAT' ? Math.round(t.freight / (1 + rate)) : t.freight), 0); return `<tr>
             <td><input type="checkbox" data-pi="${i}" ${ex < p.trips.length ? 'checked' : ''}></td><td class="code">${esc(p.name)}</td><td>${mLabel(p.ym)}</td>
             <td class="num">${p.trips.length}${ex ? `<br><small class="muted">đã có ${ex}</small>` : ''}</td>
             <td>${U.money(p.got.freight)} ${ck(p.got.freight, p.total && p.total.freight)}</td><td>${U.money(p.got.lolo)} ${ck(p.got.lolo, p.total && p.total.lolo)}</td>
@@ -1159,18 +1280,18 @@
             <td style="white-space:normal;min-width:220px">${p.warn.length ? `<details><summary>${chip(p.warn.length + ' cảnh báo', 'warn')}</summary><small>${p.warn.map(esc).join('<br>')}</small></details>` : chip('Không có', 'ok')}</td></tr>`; }).join('')}
           </tbody></table>
           ${noPlate ? `<div class="field" style="max-width:420px;margin-top:12px"><label>Dòng thiếu số xe (${noPlate} container) gán cho xe</label><select id="imfb"><option value="">— Để trống, bổ sung sau —</option>${plates.map(pl => `<option ${pl === st.fb ? 'selected' : ''}>${esc(pl)}</option>`).join('')}</select></div>` : ''}
-          <p class="muted" style="margin:10px 0">"Lãi ước tính" = cước trước VAT − chi phí tháng (phí nâng/hạ chi hộ thu và chi bằng nhau nên không tính). Trong file gốc, lãi được tính trên cước <b>gồm</b> VAT nên sẽ cao hơn.</p>
+          <p class="muted" style="margin:10px 0">"Lãi ước tính" = cước (${esc(Store.revBasis().toLowerCase())}) − chi phí tháng. Phí nâng/hạ là chi hộ nên không tính vào lãi. Đổi cách tính doanh thu tại Thiết lập công ty.</p>
           <button class="btn primary" id="imgo" ${st.busy ? 'disabled' : ''}>${ic('check')} Nhập các tháng đã chọn</button> <button class="btn" id="imx">Huỷ</button>
         </div></div>` : ''}
         ${st.done ? `<div class="card"><div class="card-h"><h3>Đã nhập xong</h3></div><div class="card-b">
-          ${st.done.map(r => `<div style="margin-bottom:8px"><b>${mLabel(r.ym)}</b> (${esc(r.sheet)}): ${r.trips} container${r.skipped ? `, bỏ qua ${r.skipped} đã có` : ''} · doanh thu cước ${U.money(r.revenue)} đ · chi hộ ${U.money(r.lolo)} đ · chi phí tháng ${U.money(r.costs)} đ
+          ${st.done.map(r => `<div style="margin-bottom:8px"><b>${mLabel(r.ym)}</b> (${esc(r.sheet)}): ${r.trips} container${r.skipped ? `, bỏ qua ${r.skipped} đã có` : ''} · cước (gồm VAT) ${U.money(r.revenue)} đ · chi hộ ${U.money(r.lolo)} đ · chi phí tháng ${U.money(r.costs)} đ${r.paid ? ` · khách đã thanh toán ${U.money(r.paid)} đ` : ''}
             <br><small class="muted">Tạo mới: ${Object.entries(r.created).filter(([, n]) => n).map(([c, n]) => `${esc(M[c] ? M[c].title : c)} ${n}`).join(', ') || 'không có'}</small></div>`).join('')}
-          <a class="btn" href="#/p/rpt_month">Doanh thu - chi phí theo tháng</a> <a class="btn" href="#/p/rpt_vehicle">Lãi lỗ theo đầu xe</a> <a class="btn" href="#/p/rpt_debt">Công nợ khách hàng</a>
+          <a class="btn primary" href="#/p/receivable">Công nợ & thanh toán</a> <a class="btn" href="#/p/rpt_month">Doanh thu - chi phí theo tháng</a> <a class="btn" href="#/p/rpt_vehicle">Lãi lỗ theo đầu xe</a>
         </div></div>` : ''}
         <div class="card" style="overflow:auto"><div class="card-h"><h3>Các tháng đã nhập từ bảng tổng hợp</h3></div><div class="card-b">
           <table class="grid"><thead><tr><th class="nosort">Tháng</th><th class="nosort">Số bản ghi</th><th class="nosort">Lúc nhập</th><th class="nosort"></th></tr></thead><tbody>
           ${bs.map(b => `<tr><td class="code">${mLabel(b.ym)}</td><td>${Object.entries(b.counts).map(([c, n]) => `${esc(M[c].title)} ${n}`).join(' · ')}</td><td>${U.date(b.at)}</td><td style="text-align:right">${isFinal() ? `<button class="btn sm danger" data-undo="${esc(b.batch)}">Gỡ đợt nhập</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="4"><div class="empty">Chưa nhập tháng nào</div></td></tr>'}
-          </tbody></table><div class="hint">"Gỡ đợt nhập" chuyển đơn hàng, doanh thu, chi phí của tháng đó vào Thùng rác (khôi phục được). Xe, khách hàng, địa điểm đã tạo được giữ lại.</div></div></div></div>`;
+          </tbody></table><div class="hint">"Gỡ đợt nhập" chuyển đơn hàng, doanh thu, chi hộ, thanh toán từ file, chi phí của tháng đó vào Thùng rác (khôi phục được). Xe, khách hàng, địa điểm đã tạo được giữ lại.</div></div></div></div>`;
       $('#imv', el).onchange = e => { st.vat = e.target.value; if (st.parsed) redraw(); };
       $('#imf', el).onchange = async e => {
         const f = e.target.files[0]; if (!f) return;
@@ -1204,7 +1325,8 @@
       const s = Store.settings();
       el.innerHTML = head('Thiết lập công ty') + `<form class="card" id="sf" style="max-width:760px"><div class="card-b"><div class="form-grid">
         ${[['company', 'Tên công ty'], ['tax_code', 'Mã số thuế'], ['address', 'Địa chỉ'], ['phone', 'Điện thoại'], ['email', 'Email'], ['bank', 'Tài khoản ngân hàng']].map(([k, l]) => `<div class="field"><label>${l}</label><input name="${k}" value="${esc(s[k] || '')}"></div>`).join('')}
-        <div class="field"><label>Giá dầu tham chiếu (đ/lít)</label><input name="fuel_price" type="number" value="${esc(s.fuel_price || '')}"></div></div>
+        <div class="field"><label>Giá dầu tham chiếu (đ/lít)</label><input name="fuel_price" type="number" value="${esc(s.fuel_price || '')}"></div>
+        <div class="field"><label>Doanh thu tính theo</label><select name="rev_basis">${['Gồm VAT', 'Trước VAT'].map(v => `<option ${(s.rev_basis || 'Gồm VAT') === v ? 'selected' : ''}>${v}</option>`).join('')}</select><div class="hint">Áp dụng cho Tổng quan, báo cáo lãi lỗ, biểu đồ. Phí nâng/hạ chi hộ không bao giờ tính vào doanh thu.</div></div></div>
         <button class="btn primary">${ic('check')} Lưu thiết lập</button></div></form>`;
       $('#sf', el).onsubmit = e => { e.preventDefault(); Store.saveSettings(Object.fromEntries(new FormData(e.target))); toast('Đã lưu thiết lập'); };
     },
